@@ -1,0 +1,11 @@
+packages:
+  - backend
+  - frontend
+  - shared
+
+# Native/post-install scripts that are allowed to run (pnpm blocks the rest).
+allowBuilds:
+  bufferutil: true
+  esbuild: true
+  keccak: true
+  utf-8-validate: true

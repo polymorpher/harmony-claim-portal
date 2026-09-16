@@ -1,0 +1,35 @@
+.DS_Store
+.cursor/
+.claude/
+.codex/
+
+# Planning leftovers and machine notes — not for the public tree
+local/
+
+# Secrets and machine-specific configuration
+.env
+.env.*
+infra/env.sh
+*.pem
+*.key
+
+# Build output and dependencies
+node_modules/
+dist/
+build/
+.venv/
+__pycache__/
+*.pyc
+*.tsbuildinfo
+coverage/
+.vite/
+
+# Local data: claim inputs live in the harmony-migration checkout, never here
+data/
+pgdata/
+*.log
+*.partial
+*.csv
+*.dump
+*.sql.gz
+injector/out/

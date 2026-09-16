@@ -1,0 +1,18 @@
+{
+  "name": "harmony-claim-portal",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Claim lookup portal for the Harmony to Ethereum ERC-20 migration",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=9"
+  },
+  "packageManager": "pnpm@12.4.2",
+  "scripts": {
+    "build": "pnpm -r --filter ./backend --filter ./frontend run build",
+    "test": "pnpm -r --filter ./backend run test",
+    "test:infra": "infra/test/gcloud-args-test.sh",
+    "typecheck": "pnpm -r run typecheck",
+    "shellcheck": "shellcheck -x infra/*.sh infra/gcp/*.sh infra/gcp/vm/*.sh infra/cloudflare/*.sh infra/test/*.sh backend/deploy/*.sh frontend/deploy/*.sh scripts/*.sh db/seed/*.sh"
+  }
+}

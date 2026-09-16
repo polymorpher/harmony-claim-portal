@@ -1,0 +1,19 @@
+[project]
+name = "harmony-claim-injector"
+version = "0.1.0"
+description = "Loads harmony-migration cutoff claims and routing exceptions into the claim portal PostgreSQL database"
+requires-python = ">=3.12"
+dependencies = [
+  "psycopg[binary]>=3.2",
+  "pycryptodome>=3.20",
+]
+
+[project.scripts]
+inject-claims = "inject_claims:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["inject_claims"]

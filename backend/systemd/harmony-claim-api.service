@@ -1,0 +1,29 @@
+[Unit]
+Description=Harmony claim portal lookup API
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=claimapi
+Group=claimapi
+WorkingDirectory=/opt/harmony-claim-api/current
+EnvironmentFile=/etc/harmony-claim-api.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node /opt/harmony-claim-api/current/dist/server.js
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+
+# hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/harmony-claim-api
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

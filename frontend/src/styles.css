@@ -1,0 +1,87 @@
+:root {
+  color-scheme: light dark;
+  --bg: #0f1419;
+  --card: #171d25;
+  --border: #2a3441;
+  --text: #e6edf3;
+  --muted: #8b98a8;
+  --accent: #00aee9;
+  --ok: #1f8f5f;
+  --warn: #b8862b;
+  --bad: #c2453f;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 16px;
+  line-height: 1.45;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; word-break: break-all; }
+
+.page { max-width: 880px; margin: 0 auto; padding: 32px 20px 64px; }
+.header h1 { margin: 0 0 6px; font-size: 1.7rem; }
+.sub { margin: 0 0 24px; color: var(--muted); }
+
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px 22px; margin-bottom: 20px; }
+.card h2 { margin: 0 0 14px; font-size: 1.1rem; }
+.block { margin-top: 22px; }
+.block h3 { margin: 0 0 8px; font-size: 1rem; }
+
+button {
+  background: var(--accent); color: #041018; border: 0; border-radius: 8px;
+  padding: 10px 16px; font-weight: 600; cursor: pointer; font-size: 0.95rem;
+}
+button:disabled { opacity: 0.6; cursor: default; }
+button.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+
+.connect-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+.pill { padding: 6px 12px; border-radius: 999px; font-size: 0.9rem; border: 1px solid var(--border); }
+.pill.ok { border-color: var(--ok); }
+
+.lookup label { display: block; color: var(--muted); font-size: 0.9rem; margin-bottom: 6px; }
+.row { display: flex; gap: 10px; }
+input {
+  flex: 1; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border);
+  background: #0c1117; color: var(--text); font-family: ui-monospace, Menlo, monospace; font-size: 0.95rem;
+}
+
+.error { color: var(--bad); margin: 8px 0 0; }
+.muted { color: var(--muted); }
+.small { font-size: 0.85rem; color: var(--muted); }
+
+.banner { padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 14px; }
+.banner.ok { border-color: var(--ok); background: rgba(31, 143, 95, 0.12); }
+.banner.warn { border-color: var(--warn); background: rgba(184, 134, 43, 0.12); }
+.banner.neutral { background: rgba(139, 152, 168, 0.1); }
+
+.addr { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; }
+.addr dt { color: var(--muted); }
+.addr dd { margin: 0; }
+
+.summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 18px; }
+.summary > div { background: #0c1117; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; }
+.summary .label { color: var(--muted); font-size: 0.85rem; }
+.summary .big { font-size: 1.25rem; font-weight: 600; }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+th, td { padding: 8px 6px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+th { color: var(--muted); font-weight: 500; font-size: 0.85rem; }
+.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.total td { font-weight: 600; }
+tr.deduction td { color: #f0a09b; }
+tr.hold td { color: #e8c777; }
+
+.adjustments, .notes { margin: 0; padding-left: 0; list-style: none; }
+.adjustments li { padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 8px; }
+.adjustments li.deduction { border-color: var(--bad); }
+.adjustments li.hold { border-color: var(--warn); }
+.adj-head { display: flex; justify-content: space-between; gap: 12px; font-weight: 600; }
+.notes li { padding: 6px 0; border-bottom: 1px solid var(--border); }
+
+.footer { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 0.85rem; margin-top: 12px; }
+
+@media (max-width: 600px) {
+  .row { flex-direction: column; }
+  .addr { grid-template-columns: 1fr; }
+  th:nth-child(3), td:nth-child(3), th:nth-child(4), td:nth-child(4) { display: none; }
+}

@@ -1,0 +1,42 @@
+{
+  "not_issuing_blacklisted_extra_mint_recipient": {
+    "title": "Deduction: unreturned extra-mint from the 2023 incident",
+    "user_text": "This exact amount was received from the 2023 extra-mint incident and was never returned. Under the published non-issuance policy it is deducted from the claim and no ERC-20 tokens or vault shares are created for it. The remainder of the claim, if any, is unaffected."
+  },
+  "not_issuing_burn_or_inaccessible": {
+    "title": "Deduction: burn or inaccessible address",
+    "user_text": "This balance sits at a burn address or an address that is provably inaccessible. It is not issued on Ethereum."
+  },
+  "not_issuing_reported_wallet_theft_perpetrator": {
+    "title": "Deduction: reported wallet-theft proceeds",
+    "user_text": "This exact amount was identified in an audited theft report as perpetrator proceeds. It is not issued on Ethereum."
+  },
+  "non_multisig_contract_recovery_custody": {
+    "title": "Routed to contract-recovery custody",
+    "user_text": "This balance belongs to a reviewed smart contract. It is transferred to a segregated recovery custody address and released to a verified claimant in a later phase. It is not spendable as treasury money."
+  },
+  "wone_reserve_custody": {
+    "title": "Routed to WONE reserve custody",
+    "user_text": "The native ONE backing Wrapped ONE is migrated once to a dedicated reserve multisig. WONE holders will claim from that finite reserve in a later phase."
+  },
+  "layerzero_nativeoft_reconciliation_hold": {
+    "title": "Held: LayerZero NativeOFT reconciliation pending",
+    "user_text": "This reserve backs cross-chain tokens. It stays on hold until the remote-chain supply and messages in flight are reconciled and a custody destination is approved."
+  },
+  "contract_review": {
+    "title": "Held: smart contract, later phase",
+    "user_text": "This account is a smart contract. Contract balances are not delivered to the same address automatically; they are handled through a class-specific recovery process in a later phase."
+  },
+  "deferred": {
+    "title": "Deferred: below the 1,000 ONE threshold",
+    "user_text": "The total claim for this account is below the 1,000 ONE eligibility threshold, so it is not part of the prioritized distribution."
+  },
+  "verified validator wrapper same-address": {
+    "title": "Verified validator account",
+    "user_text": "This account carries Harmony validator data in its code field but was verified to be key-controlled. Its wallet tokens and vault shares are delivered to the same address."
+  },
+  "explicit_governor_route": {
+    "title": "Vault governor pending approval",
+    "user_text": "The governor of this validator's vault is on hold until an approved Ethereum governor address is recorded."
+  }
+}
