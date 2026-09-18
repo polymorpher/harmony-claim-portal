@@ -69,11 +69,13 @@ th { color: var(--muted); font-weight: 500; font-size: 0.85rem; }
 .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 tr.total td { font-weight: 600; }
 tr.deduction td { color: #f0a09b; }
+tr.redistribution td { color: #a8b6f0; }
 tr.hold td { color: #e8c777; }
 
 .adjustments, .notes { margin: 0; padding-left: 0; list-style: none; }
 .adjustments li { padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 8px; }
 .adjustments li.deduction { border-color: var(--bad); }
+.adjustments li.redistribution { border-color: #697cc7; }
 .adjustments li.hold { border-color: var(--warn); }
 .adj-head { display: flex; justify-content: space-between; gap: 12px; font-weight: 600; }
 .notes li { padding: 6px 0; border-bottom: 1px solid var(--border); }

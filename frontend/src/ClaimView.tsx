@@ -5,23 +5,29 @@ const STATUS_LABEL: Record<string, string> = {
   ready: "Ready",
   hold: "On hold",
   not_issuing: "Not issued",
+  redistributed: "Redistributed",
   none: "-",
 };
 
 function Banner({ claim }: { claim: ClaimResponse }) {
+  const disposition = claim.disposition;
+  if (disposition) {
+    const tone =
+      disposition.code === "automatic_same_address"
+        ? "ok"
+        : disposition.code === "handled_by_exchange" || disposition.code === "exchange_no_claim"
+          ? "neutral"
+          : "warn";
+    return (
+      <div className={`banner ${tone}`}>
+        <strong>{disposition.title}.</strong> {disposition.detail}
+      </div>
+    );
+  }
   if (!claim.found) {
     return (
       <div className="banner neutral">
         <strong>No claim recorded.</strong> This address had no balance, stake or pending amount at the cutoff.
-      </div>
-    );
-  }
-  if (claim.account_type === "contract") {
-    return (
-      <div className="banner warn">
-        <strong>Smart contract{claim.contract_category ? ` (${claim.contract_category})` : ""}.</strong> Contract
-        accounts are handled in a later phase through a class-specific recovery process. Nothing is sent to the
-        contract address automatically.
       </div>
     );
   }
@@ -30,19 +36,23 @@ function Banner({ claim }: { claim: ClaimResponse }) {
   if (!e.meets_threshold) {
     return (
       <div className="banner warn">
-        <strong>Deferred.</strong> Total claim {one(e.total_claim_atto)} ONE is below the {one(claim.meta.threshold_atto, 0)} ONE
+        <strong>Deferred.</strong> Qualification total {one(e.qualification_total_atto)} ONE is below the {one(claim.meta.threshold_atto, 0)} ONE
         threshold, so it is not part of the prioritized distribution.
       </div>
     );
   }
   return (
     <div className="banner ok">
-      <strong>Prioritized.</strong> Gross claim {one(e.total_claim_atto)} ONE at the cutoff.
+      <strong>Prioritized.</strong> Post-deduction claim {one(e.total_claim_atto)} ONE.
     </div>
   );
 }
 
 function AddressBlock({ claim }: { claim: ClaimResponse }) {
+  const nonGateExchange = claim.exchange_treatments.find((row) => row.exchange_id !== "gate");
+  const accountType = nonGateExchange
+    ? "exchange-controlled wallet"
+    : claim.account_type?.replace(/_/g, " ");
   return (
     <dl className="addr">
       <dt>Address</dt>
@@ -53,10 +63,10 @@ function AddressBlock({ claim }: { claim: ClaimResponse }) {
       <dd>
         <code>{claim.address.bech32}</code>
       </dd>
-      {claim.account_type && (
+      {accountType && (
         <>
           <dt>Account type</dt>
-          <dd>{claim.account_type.replace(/_/g, " ")}</dd>
+          <dd>{accountType}</dd>
         </>
       )}
     </dl>
@@ -93,21 +103,33 @@ function Wallet({ claim }: { claim: ClaimResponse }) {
             <td>Pending cross-shard transfers</td>
             <td className="num">{one(c.pending_cross_shard_atto)}</td>
           </tr>
+          <tr>
+            <td>WONE balance at cutoff</td>
+            <td className="num">{one(c.wone_balance_atto)} WONE</td>
+          </tr>
+          <tr>
+            <td>WONE included in this migration batch</td>
+            <td className="num">{one(c.wone_airdrop_atto)}</td>
+          </tr>
           <tr className="total">
-            <td>Gross wallet airdrop</td>
+            <td>Gross wallet entitlement</td>
             <td className="num">{one(w.gross_atto)}</td>
           </tr>
           {walletDeductions.map((a, i) => (
-            <tr key={i} className={a.kind === "deduction" ? "deduction" : "hold"}>
+            <tr key={i} className={a.kind === "deduction" ? "deduction" : a.kind === "redistribution" ? "redistribution" : "hold"}>
               <td>
                 {a.title}
                 <div className="small">{a.user_text}</div>
               </td>
-              <td className="num">{a.kind === "deduction" ? "−" : ""}{one(a.amount_atto)}</td>
+              <td className="num">{a.kind === "deduction" || a.kind === "redistribution" ? "−" : ""}{one(a.amount_atto)}</td>
             </tr>
           ))}
           <tr className="total">
-            <td>Issuable now</td>
+            <td>Post-deduction wallet entitlement</td>
+            <td className="num">{one(w.net_atto)}</td>
+          </tr>
+          <tr className="total">
+            <td>Deliverable now</td>
             <td className="num">{one(w.issuable_atto)}</td>
           </tr>
           <tr>
@@ -122,6 +144,33 @@ function Wallet({ claim }: { claim: ClaimResponse }) {
           </tr>
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function Exchanges({ claim }: { claim: ClaimResponse }) {
+  if (claim.exchange_treatments.length === 0) return null;
+  return (
+    <div className="block">
+      <h3>Exchange custody</h3>
+      {claim.exchange_treatments.map((row) => (
+        <dl className="addr" key={row.exchange_id}>
+          <dt>Exchange</dt>
+          <dd>{row.display_name}</dd>
+          <dt>Current treatment</dt>
+          <dd>{row.planned_delivery_status.replace(/_/g, " ")}</dd>
+          <dt>Aggregate destination</dt>
+          <dd>
+            {row.destination.address ? (
+              <code>{row.destination.address}</code>
+            ) : row.destination.status === "none" ? (
+              "Not applicable — no cutoff claim"
+            ) : (
+              STATUS_LABEL[row.destination.status]
+            )}
+          </dd>
+        </dl>
+      ))}
     </div>
   );
 }
@@ -184,7 +233,7 @@ function Adjustments({ adjustments }: { adjustments: Adjustment[] }) {
             <div className="adj-head">
               <span>{a.title}</span>
               <span className="num">
-                {a.kind === "deduction" ? "−" : ""}
+                {a.kind === "deduction" || a.kind === "redistribution" ? "−" : ""}
                 {one(a.amount_atto)} ONE
               </span>
             </div>
@@ -201,6 +250,9 @@ function Adjustments({ adjustments }: { adjustments: Adjustment[] }) {
 }
 
 export function ClaimView({ claim }: { claim: ClaimResponse }) {
+  const netVaultAtto = claim.vault_positions
+    .reduce((total, position) => total + BigInt(position.expected_shares_atto), 0n)
+    .toString();
   return (
     <div className="claim">
       <Banner claim={claim} />
@@ -208,21 +260,22 @@ export function ClaimView({ claim }: { claim: ClaimResponse }) {
       {claim.found && claim.eligibility && (
         <div className="summary">
           <div>
-            <span className="label">Gross total claim</span>
+            <span className="label">Post-deduction total claim</span>
             <span className="big">{one(claim.eligibility.total_claim_atto)} ONE</span>
           </div>
           <div>
-            <span className="label">Wallet airdrop</span>
-            <span className="big">{one(claim.wallet_airdrop?.gross_atto)} ONE</span>
+            <span className="label">Post-deduction wallet entitlement</span>
+            <span className="big">{one(claim.wallet_airdrop?.net_atto)} ONE</span>
           </div>
           <div>
-            <span className="label">Staked to vaults</span>
-            <span className="big">{one(claim.components?.staked_to_vault_atto)} ONE</span>
+            <span className="label">Post-deduction vault shares</span>
+            <span className="big">{one(netVaultAtto)} ONE</span>
           </div>
         </div>
       )}
       <Wallet claim={claim} />
       <Vaults positions={claim.vault_positions} />
+      <Exchanges claim={claim} />
       <Adjustments adjustments={claim.adjustments} />
       {claim.notes.length > 0 && (
         <div className="block">
@@ -239,6 +292,7 @@ export function ClaimView({ claim }: { claim: ClaimResponse }) {
           Last activity before cutoff: {formatUtc(claim.last_activity.time_utc)}
           {claim.last_activity.block ? `, block ${claim.last_activity.block.toLocaleString()}` : ""}
           {claim.last_activity.shard !== null ? ` on shard ${claim.last_activity.shard}` : ""}
+          . This is contextual indexed activity, not proof of current control or eligibility.
         </p>
       )}
     </div>

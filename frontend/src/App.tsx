@@ -82,11 +82,18 @@ export function App() {
         <div>
           <h1>Harmony migration claim lookup</h1>
           <p className="sub">
-            See how your Harmony ONE balance at the cutoff maps to the Ethereum ERC-20 airdrop and validator
-            vault shares.
+            See how your native ONE, WONE, and staking claims at the cutoff map to Ethereum ERC-20 ONE,
+            validator vault shares, or a policy-specific recovery route.
           </p>
         </div>
       </header>
+
+      {meta.data?.routing_status === "hold" && (
+        <div className="banner warn">
+          <strong>Routing preview.</strong> Claim accounting is available for review, but unresolved destinations
+          and policy decisions remain. Displayed routing is not a final issuance authorization.
+        </div>
+      )}
 
       <section className="card">
         <h2>1. Choose an address</h2>
@@ -159,11 +166,12 @@ export function App() {
               Cutoff: shard 0 block {meta.data.cutoff.shard0?.block.toLocaleString() ?? "?"}, shard 1 block{" "}
               {meta.data.cutoff.shard1?.block.toLocaleString() ?? "?"} ({formatUtc(meta.data.cutoff.requested_time_utc)})
             </span>
-            <span>Threshold: {one(meta.data.threshold_atto, 0)} ONE total claim</span>
+            <span>Threshold: {one(meta.data.threshold_atto, 0)} ONE qualification total (native claim + WONE)</span>
             <span>
               Data version: {meta.data.data_version ?? "-"}
               {meta.data.fixture ? " (synthetic test data)" : ""}
             </span>
+            <span>Routing status: {meta.data.routing_status ?? "-"}</span>
           </>
         ) : (
           <span className="muted">Loading cutoff information…</span>
