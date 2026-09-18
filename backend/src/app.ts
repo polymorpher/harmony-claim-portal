@@ -90,18 +90,27 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   app.get<{ Params: { address: string } }>("/api/v1/claims/:address", async (req, reply) => {
     if (!req.params.address) return reply.callNotFound();
     const address = normalizeAddress(req.params.address);
-    const [account, delegations, exceptions, reasonTexts, meta] = await Promise.all([
+    const [account, delegations, exceptions, exchangeWallets, reasonTexts, meta] = await Promise.all([
       repo.getAccount(address),
       repo.getDelegations(address),
       repo.getExceptions(address),
+      repo.getExchangeWallets(address),
       repo.getReasonTexts(),
       repo.getMeta(),
     ]);
     const validators = [...new Set(delegations.map((d) => d.validator_address.toLowerCase()))];
     const vaults = await repo.getVaults(validators);
-    return buildClaimResponse(address, account, delegations, exceptions, vaults, reasonTexts, meta, {
-      exposeContractAmounts: config.exposeContractAmounts,
-    });
+    return buildClaimResponse(
+      address,
+      account,
+      delegations,
+      exceptions,
+      exchangeWallets,
+      vaults,
+      reasonTexts,
+      meta,
+      { exposeContractAmounts: config.exposeContractAmounts },
+    );
   });
 
   app.setNotFoundHandler({ preHandler: app.rateLimit() }, async (_req, reply) => {

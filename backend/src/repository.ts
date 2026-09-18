@@ -12,14 +12,23 @@ export interface AccountRow {
   account_category: "ordinary_eoa" | "validator_account" | "contract" | "excluded";
   code_bearing: boolean;
   contract_primary_category: string | null;
+  contract_subcategory: string | null;
+  contract_identity: string | null;
+  contract_treatment: string | null;
+  policy_category: string | null;
   liquid_shard0_atto: string;
   liquid_shard1_atto: string;
   active_staked_or_delegated_atto: string;
   pending_undelegation_atto: string;
   unclaimed_staking_reward_atto: string;
   pending_cross_shard_atto: string;
+  native_wallet_airdrop_atto: string;
+  wone_balance_atto: string;
+  wone_airdrop_atto: string;
   wallet_airdrop_atto: string;
   staked_to_vault_atto: string;
+  qualification_total_atto: string;
+  native_total_claim_atto: string;
   total_claim_atto: string;
   meets_threshold: boolean;
   last_activity_time_utc: string | Date | null;
@@ -59,9 +68,20 @@ export interface ExceptionRow {
   route_priority: string | number;
   destination_id: string | null;
   destination_address: string | null;
-  destination_status: "ready" | "hold" | "not_issuing";
+  destination_status: "ready" | "hold" | "not_issuing" | "redistributed";
   reason: string;
   evidence: string;
+}
+
+export interface ExchangeRow {
+  exchange_id: string;
+  display_name: string;
+  address: string;
+  delivery_policy: string;
+  qualification_status: string;
+  planned_delivery_status: string;
+  configured_destination: string | null;
+  configured_destination_status: string;
 }
 
 export interface ReasonText {
@@ -77,6 +97,7 @@ export interface ClaimRepository {
   getAccount(addressLower: string): Promise<AccountRow | null>;
   getDelegations(addressLower: string): Promise<DelegationRow[]>;
   getExceptions(addressLower: string): Promise<ExceptionRow[]>;
+  getExchangeWallets(addressLower: string): Promise<ExchangeRow[]>;
   getVaults(validatorAddresses: string[]): Promise<VaultRow[]>;
   getReasonTexts(): Promise<Record<string, ReasonText>>;
   close(): Promise<void>;
@@ -118,11 +139,24 @@ export class PgRepository implements ClaimRepository {
   async getAccount(addressLower: string): Promise<AccountRow | null> {
     const res = await this.pool.query<AccountRow>(
       `SELECT secure_key, address, address_resolved, account_category, code_bearing,
-              contract_primary_category,
+              contract_primary_category, contract_subcategory, contract_identity,
+              contract_treatment, policy_category,
               liquid_shard0_atto::text, liquid_shard1_atto::text,
               active_staked_or_delegated_atto::text, pending_undelegation_atto::text,
               unclaimed_staking_reward_atto::text, pending_cross_shard_atto::text,
-              wallet_airdrop_atto::text, staked_to_vault_atto::text, total_claim_atto::text,
+              CASE WHEN qualification_total_atto = 0 AND total_claim_atto <> 0
+                   THEN wallet_airdrop_atto ELSE native_wallet_airdrop_atto END::text
+                AS native_wallet_airdrop_atto,
+              wone_balance_atto::text,
+              wone_airdrop_atto::text, wallet_airdrop_atto::text,
+              staked_to_vault_atto::text,
+              CASE WHEN qualification_total_atto = 0 AND total_claim_atto <> 0
+                   THEN total_claim_atto ELSE qualification_total_atto END::text
+                AS qualification_total_atto,
+              CASE WHEN qualification_total_atto = 0 AND total_claim_atto <> 0
+                   THEN total_claim_atto ELSE native_total_claim_atto END::text
+                AS native_total_claim_atto,
+              total_claim_atto::text,
               meets_threshold, last_activity_time_utc, last_activity_block,
               last_activity_shard, last_activity_type, last_activity_tx_hash
          FROM accounts
@@ -166,6 +200,23 @@ export class PgRepository implements ClaimRepository {
       source_address: r.source_address.trim(),
       validator_address: trimChar(r.validator_address),
       destination_address: trimChar(r.destination_address),
+    }));
+  }
+
+  async getExchangeWallets(addressLower: string): Promise<ExchangeRow[]> {
+    const res = await this.pool.query<ExchangeRow>(
+      `SELECT exchange_id, display_name, address, delivery_policy,
+              qualification_status, planned_delivery_status,
+              configured_destination, configured_destination_status
+         FROM exchange_wallets
+        WHERE address = $1
+        ORDER BY exchange_id`,
+      [addressLower],
+    );
+    return res.rows.map((r) => ({
+      ...r,
+      address: r.address.trim(),
+      configured_destination: trimChar(r.configured_destination),
     }));
   }
 
