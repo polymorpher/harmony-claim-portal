@@ -17,14 +17,46 @@ log()  { printf '\033[1;34m==>\033[0m %s\n' "$*" >&2; }
 warn() { printf '\033[1;33mwarning:\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
-# Load infra/env.sh (gitignored). Fails with a clear message when absent.
+# Load KEY=VALUE pairs from the repo-root .env (or $HCP_ENV_FILE). The file is
+# parsed, not sourced: no command substitution, no `source` of operator input.
 load_env() {
-  local env_file="${HCP_ENV_FILE:-$REPO_ROOT/infra/env.sh}"
+  local env_file="${HCP_ENV_FILE:-$REPO_ROOT/.env}"
   if [ ! -f "$env_file" ]; then
-    die "missing $env_file; copy infra/env.example.sh to infra/env.sh and fill it in"
+    die "missing $env_file; copy .env.example to .env and fill it in"
   fi
-  # shellcheck source=/dev/null
-  source "$env_file"
+  load_dotenv "$env_file"
+}
+
+# Assign and export KEY=VALUE lines. Blank lines and # comments are skipped.
+# Quoted values keep spaces. $(...), backticks, and ${...} are rejected.
+load_dotenv() {
+  local env_file="$1"
+  local line key value n=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
+    line="${line%$'\r'}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    case "$line" in
+      ''|\#*) continue ;;
+    esac
+    if [[ ! "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+      die "invalid .env line $n in $env_file (expected KEY=VALUE)"
+    fi
+    key="${BASH_REMATCH[1]}"
+    value="${BASH_REMATCH[2]}"
+    # shellcheck disable=SC2016 # literal expansion markers are rejected
+    case "$value" in
+      *'$('*|*'`'*|*'${'*) die "refusing shell expansion in $env_file:$n ($key)" ;;
+    esac
+    if [[ "$value" =~ ^\"(.*)\"$ ]]; then
+      value="${BASH_REMATCH[1]}"
+    elif [[ "$value" =~ ^\'(.*)\'$ ]]; then
+      value="${BASH_REMATCH[1]}"
+    fi
+    printf -v "$key" '%s' "$value"
+    # shellcheck disable=SC2163 # export the dynamically parsed variable name
+    export "$key"
+  done <"$env_file"
 }
 
 # require_vars GCP_PROJECT GCP_REGION ...
@@ -35,7 +67,7 @@ require_vars() {
     if [ -z "${!v:-}" ]; then missing+=("$v"); fi
   done
   if [ "${#missing[@]}" -gt 0 ]; then
-    die "unset required variables: ${missing[*]} (see infra/env.example.sh)"
+    die "unset required variables: ${missing[*]} (see .env.example)"
   fi
 }
 
@@ -95,7 +127,7 @@ wait_for() {
   return 1
 }
 
-# Default resource names derived from env.sh; override by exporting first.
+# Default resource names derived from .env; override by exporting first.
 set_defaults() {
   : "${GCP_REGION:=us-west1}"
   : "${GCP_ZONE:=us-west1-b}"

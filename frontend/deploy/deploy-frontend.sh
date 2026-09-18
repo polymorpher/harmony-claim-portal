@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the SPA and publish it to the frontend bucket behind the load balancer.
-#   source infra/env.sh && frontend/deploy/deploy-frontend.sh
+#   frontend/deploy/deploy-frontend.sh
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -2,7 +2,7 @@
 # Build the API locally, ship it to the VM over IAP, apply pending SQL
 # migrations, seed reason texts, restart the systemd unit and health-check.
 #
-#   source infra/env.sh && backend/deploy/deploy-backend.sh
+#   backend/deploy/deploy-backend.sh
 #
 # Requires: the VM from infra/gcp/10-create-vm.sh with bootstrap finished
 # (it created $APP_USER, $APP_DIR, $APP_ENV_FILE and installed the unit).

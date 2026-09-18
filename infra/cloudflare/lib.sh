@@ -11,7 +11,7 @@ CF_API="${CF_API:-https://api.cloudflare.com/client/v4}"
 cf_require() {
   require_tools curl jq
   if [ -z "${CF_API_TOKEN:-}" ]; then
-    die "CF_API_TOKEN is unset; create a token with Zone.DNS:Edit + Zone.Zone Settings:Edit + Zone.Zone:Read and put it in infra/env.sh"
+    die "CF_API_TOKEN is unset; create a token with Zone.DNS:Edit + Zone.Zone Settings:Edit + Zone.Zone:Read and put it in .env"
   fi
   require_vars CF_ZONE_NAME
 }
@@ -35,7 +35,17 @@ cf_api() {
 }
 
 cf_verify_token() {
-  cf_api GET /user/tokens/verify | jq -r '.status' | grep -qx active || die "CF_API_TOKEN is not active"
+  if (cf_api GET /user/tokens/verify | jq -e '.status == "active"') >/dev/null 2>&1; then
+    return 0
+  fi
+  # Account-owned tokens are valid for zone APIs but are rejected by the
+  # user-token verification endpoint. Verify their configured-zone access.
+  if [ -n "${CF_ZONE_NAME:-}" ] && \
+     (cf_api GET "/zones?name=${CF_ZONE_NAME}&status=active" | jq -e 'length > 0') >/dev/null 2>&1; then
+    log "cloudflare token: zone access verified"
+    return 0
+  fi
+  die "CF_API_TOKEN is not active or cannot access zone ${CF_ZONE_NAME:-<unset>}"
 }
 
 # Zone id for CF_ZONE_NAME (cached in CF_ZONE_ID).

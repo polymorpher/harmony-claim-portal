@@ -9,6 +9,7 @@ local/
 # Secrets and machine-specific configuration
 .env
 .env.*
+!.env.example
 infra/env.sh
 *.pem
 *.key

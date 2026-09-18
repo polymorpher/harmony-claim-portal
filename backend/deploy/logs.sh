@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tail the API's journal on the VM through IAP.
-#   source infra/env.sh && backend/deploy/logs.sh [-n 200] [--since "1 hour ago"]
+#   backend/deploy/logs.sh [-n 200] [--since "1 hour ago"]
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

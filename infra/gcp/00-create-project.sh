@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Create (or reuse) the GCP project, link billing and enable the APIs the
 # portal needs. Idempotent.
-#   source infra/env.sh && infra/gcp/00-create-project.sh
+#   infra/gcp/00-create-project.sh
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

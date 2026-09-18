@@ -17,7 +17,7 @@ export const wagmiConfig = createConfig({
             metadata: {
               name: "Harmony migration claim lookup",
               description: "Look up your Harmony ONE migration claim",
-              url: typeof window !== "undefined" ? window.location.origin : "https://migration.country",
+              url: typeof window !== "undefined" ? window.location.origin : "https://migrate.country",
               icons: [],
             },
           }),

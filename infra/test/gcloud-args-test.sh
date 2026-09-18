@@ -38,8 +38,8 @@ exit 0
 EOF
 chmod +x "$work/gcloud"
 
-cp "$root/infra/env.example.sh" "$work/env.sh"
-export HCP_ENV_FILE="$work/env.sh"
+cp "$root/.env.example" "$work/.env"
+export HCP_ENV_FILE="$work/.env"
 export PATH="$work:$PATH"
 
 fail=0
@@ -66,6 +66,12 @@ check bash -c "! grep -q ' create ' '$GCLOUD_STUB_LOG'"
 
 # malformed check (no describe verb) must die instead of silently "creating"
 check bash -c '( source "'"$root"'/infra/lib.sh"; load_env; set_defaults; gc_ensure "bad" compute addresses x -- compute addresses create x ) >/dev/null 2>&1; [ $? -ne 0 ]'
+
+# dotenv parser must reject command substitution instead of executing it
+# shellcheck disable=SC2016 # intentionally write a literal malicious value
+printf 'GCP_PROJECT=$(touch %s/pwned)\n' "$work" >"$work/evil.env"
+check bash -c '( source "'"$root"'/infra/lib.sh"; HCP_ENV_FILE="'"$work"'/evil.env" load_env ) >/dev/null 2>&1; [ $? -ne 0 ]'
+check test ! -e "$work/pwned"
 
 # --- integration: run the real scripts against the stub ------------------------------
 : >"$GCLOUD_STUB_LOG"

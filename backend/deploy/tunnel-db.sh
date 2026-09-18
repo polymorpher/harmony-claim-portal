@@ -2,7 +2,7 @@
 # Open an IAP SSH tunnel: localhost:$DB_TUNNEL_PORT -> VM:5432 (PostgreSQL is
 # bound to localhost on the VM). Keep this running while the injector loads.
 #
-#   source infra/env.sh && backend/deploy/tunnel-db.sh
+#   backend/deploy/tunnel-db.sh
 #   PGPASSWORD=... python3 injector/inject_claims.py --dsn postgres://claimapi@localhost:5433/claims ...
 #
 # The claimapi password lives in /etc/harmony-claim-api.env on the VM:

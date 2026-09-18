@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Static IP, firewall rules and the API/DB VM (Debian 12) with the bootstrap
 # startup script. Waits until the bootstrap marker appears. Idempotent.
-#   source infra/env.sh && infra/gcp/10-create-vm.sh
+#   infra/gcp/10-create-vm.sh
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

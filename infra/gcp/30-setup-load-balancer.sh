@@ -7,7 +7,7 @@
 # proxy). Prints the _acme-challenge CNAME records that
 # infra/cloudflare/setup-dns.sh must create, then polls until the cert is ACTIVE.
 #
-#   source infra/env.sh && infra/gcp/30-setup-load-balancer.sh [--no-wait]
+#   infra/gcp/30-setup-load-balancer.sh [--no-wait]
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -119,7 +119,8 @@ for d in $(all_domains); do
 done
 
 # --- HTTPS proxy + forwarding rule ---------------------------------------------------
-cert_map_ref="//certificatemanager.googleapis.com/projects/${GCP_PROJECT}/locations/global/certificateMaps/${CERT_MAP}"
+# gcloud resolves the map ID in the configured project and global location.
+cert_map_ref="$CERT_MAP"
 gc_ensure "https proxy $LB_HTTPS_PROXY_NAME" \
   compute target-https-proxies describe "$LB_HTTPS_PROXY_NAME" --global -- \
   compute target-https-proxies create "$LB_HTTPS_PROXY_NAME" --global \

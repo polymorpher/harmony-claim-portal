@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Public GCS bucket that serves the built SPA (behind the LB + Cloud CDN).
-#   source infra/env.sh && infra/gcp/20-setup-frontend-bucket.sh
+#   infra/gcp/20-setup-frontend-bucket.sh
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,7 +20,7 @@ else
   gc storage buckets create "$bucket" \
     --location="${FRONTEND_BUCKET_LOCATION:-US}" \
     --uniform-bucket-level-access \
-    --public-access-prevention=inherited
+    --no-public-access-prevention
 fi
 
 log "bucket: public read (allUsers:objectViewer)"

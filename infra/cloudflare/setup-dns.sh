@@ -3,12 +3,18 @@
 # infra/gcp/30-setup-load-balancer.sh has created the LB IP and the
 # Certificate Manager DNS authorizations.
 #
-#   source infra/env.sh && infra/cloudflare/setup-dns.sh [--rate-limit]
+#   infra/cloudflare/setup-dns.sh --acme-only
+#   infra/cloudflare/setup-dns.sh --cutover [--rate-limit] [--flexible]
 #
 # - A records for DOMAIN and EXTRA_DOMAINS -> LB IP, proxied (orange cloud)
 # - _acme-challenge CNAMEs from Certificate Manager, DNS only (grey cloud)
 # - ssl=strict, always_use_https=on, min_tls_version=1.2, automatic_https_rewrites=on
 # - confirms Universal SSL is enabled
+# - --acme-only: creates only DNS authorization CNAMEs so the Google
+#   certificate can become ACTIVE before traffic is cut over
+# - --cutover (the default): creates A and CNAME records and applies TLS settings
+# - --flexible: temporary emergency mode with an unencrypted origin connection;
+#   the GCP HTTP proxy must serve the application instead of redirecting to HTTPS
 # - --rate-limit: optional rate-limiting rule on /api/* (needs the ruleset
 #   phase available on the zone plan; skipped with a warning otherwise)
 set -euo pipefail
@@ -25,22 +31,40 @@ require_tools gcloud jq curl
 cf_require
 cf_verify_token
 
+mode=cutover
+mode_set=0
+ssl_mode=strict
 with_rate_limit=0
-[ "${1:-}" = "--rate-limit" ] && with_rate_limit=1
+for arg in "$@"; do
+  case "$arg" in
+    --acme-only|--cutover)
+      [ "$mode_set" -eq 0 ] || die "choose only one of --acme-only or --cutover"
+      mode="${arg#--}"
+      mode_set=1
+      ;;
+    --flexible) ssl_mode=flexible ;;
+    --rate-limit) with_rate_limit=1 ;;
+    *) die "unknown argument: $arg" ;;
+  esac
+done
+[ "$mode" != "acme-only" ] || [ "$with_rate_limit" -eq 0 ] || die "--rate-limit requires --cutover"
+[ "$mode" != "acme-only" ] || [ "$ssl_mode" = "strict" ] || die "--flexible requires --cutover"
 
 zone="$(cf_zone_id)"
 log "zone $CF_ZONE_NAME ($zone)"
 
 # --- A records -> load balancer IP -------------------------------------------------
-lb_ip="$(gc compute addresses describe "$LB_IP_NAME" --global --format='value(address)' 2>/dev/null || true)"
-[ -n "$lb_ip" ] || die "load balancer IP $LB_IP_NAME not found; run infra/gcp/30-setup-load-balancer.sh first"
-for d in $(all_domains); do
-  case "$d" in
-    "$CF_ZONE_NAME"|*."$CF_ZONE_NAME") ;;
-    *) die "$d is not inside zone $CF_ZONE_NAME" ;;
-  esac
-  cf_upsert_record A "$d" "$lb_ip" true
-done
+if [ "$mode" != "acme-only" ]; then
+  lb_ip="$(gc compute addresses describe "$LB_IP_NAME" --global --format='value(address)' 2>/dev/null || true)"
+  [ -n "$lb_ip" ] || die "load balancer IP $LB_IP_NAME not found; run infra/gcp/30-setup-load-balancer.sh first"
+  for d in $(all_domains); do
+    case "$d" in
+      "$CF_ZONE_NAME"|*."$CF_ZONE_NAME") ;;
+      *) die "$d is not inside zone $CF_ZONE_NAME" ;;
+    esac
+    cf_upsert_record A "$d" "$lb_ip" true
+  done
+fi
 
 # --- _acme-challenge CNAMEs from Certificate Manager (DNS only) ----------------------
 for d in $(all_domains); do
@@ -52,8 +76,16 @@ for d in $(all_domains); do
   cf_upsert_record CNAME "$name" "$data" false
 done
 
+if [ "$mode" = "acme-only" ]; then
+  log "ACME DNS records ready; wait for $CERT_NAME to become ACTIVE before --cutover"
+  exit 0
+fi
+
 # --- TLS / HTTPS settings ------------------------------------------------------------
-cf_set_setting ssl '"strict"'
+if [ "$ssl_mode" = "flexible" ]; then
+  warn "using Cloudflare Flexible SSL: traffic from Cloudflare to the origin is unencrypted"
+fi
+cf_set_setting ssl "\"$ssl_mode\""
 cf_set_setting always_use_https '"on"'
 cf_set_setting min_tls_version '"1.2"'
 cf_set_setting automatic_https_rewrites '"on"'
@@ -95,4 +127,4 @@ if [ "$with_rate_limit" -eq 1 ]; then
   fi
 fi
 
-log "done. Verify: dig +short $DOMAIN; curl -I https://$DOMAIN/api/health"
+log "cutover complete (ssl=$ssl_mode). Verify: dig +short $DOMAIN; curl -fsS https://$DOMAIN/api/health"
