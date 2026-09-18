@@ -8,17 +8,26 @@ const repo = new MemoryRepository();
 const opts = { exposeContractAmounts: false };
 
 async function lookup(address: string, exposeContractAmounts = false) {
-  const [account, delegations, exceptions, texts, meta] = await Promise.all([
+  const [account, delegations, exceptions, exchangeWallets, texts, meta] = await Promise.all([
     repo.getAccount(address),
     repo.getDelegations(address),
     repo.getExceptions(address),
+    repo.getExchangeWallets(address),
     repo.getReasonTexts(),
     repo.getMeta(),
   ]);
   const vaults = await repo.getVaults(delegations.map((d) => d.validator_address));
-  return buildClaimResponse(address, account, delegations, exceptions, vaults, texts, meta, {
-    exposeContractAmounts,
-  });
+  return buildClaimResponse(
+    address,
+    account,
+    delegations,
+    exceptions,
+    exchangeWallets,
+    vaults,
+    texts,
+    meta,
+    { exposeContractAmounts },
+  );
 }
 
 describe("amount formatting", () => {
@@ -72,6 +81,14 @@ describe("claim lookup shape", () => {
     expect(r.eligibility).toEqual({
       total_claim_atto: (7000n * ONE).toString(),
       total_claim_one: "7000",
+      gross_total_claim_atto: (7000n * ONE).toString(),
+      gross_total_claim_one: "7000",
+      not_issued_atto: "0",
+      not_issued_one: "0",
+      redistributed_atto: "0",
+      redistributed_one: "0",
+      qualification_total_atto: (7000n * ONE).toString(),
+      qualification_total_one: "7000",
       meets_threshold: true,
       status: "prioritized",
     });
@@ -92,10 +109,18 @@ describe("claim lookup shape", () => {
 
   it("uses the planned flat *_atto / *_one field names", async () => {
     const r = await lookup(ADDR.excl);
-    expect(Object.keys(r.eligibility!)).toEqual(["total_claim_atto", "total_claim_one", "meets_threshold", "status"]);
+    expect(Object.keys(r.eligibility!)).toEqual([
+      "total_claim_atto", "total_claim_one",
+      "gross_total_claim_atto", "gross_total_claim_one",
+      "not_issued_atto", "not_issued_one",
+      "redistributed_atto", "redistributed_one",
+      "qualification_total_atto", "qualification_total_one",
+      "meets_threshold", "status",
+    ]);
     expect(Object.keys(r.wallet_airdrop!)).toEqual([
       "gross_atto", "gross_one", "not_issued_atto", "not_issued_one",
-      "held_atto", "held_one", "issuable_atto", "issuable_one", "destination",
+      "redistributed_atto", "redistributed_one", "held_atto", "held_one",
+      "net_atto", "net_one", "issuable_atto", "issuable_one", "destination",
     ]);
     const p = r.vault_positions[0];
     for (const k of ["staked_atto", "not_issued_atto", "held_atto", "expected_shares_atto", "staked_one", "expected_shares_one"]) {
@@ -147,6 +172,9 @@ describe("claim lookup shape", () => {
     expect(r.adjustments[0].reason_code).toBe("not_issuing_blacklisted_extra_mint_recipient");
     expect(r.adjustments[0].title).toBe("Deduction: extra-mint");
     expect(r.notes.some((n) => /5,000 ONE is not issued/.test(n))).toBe(true);
+    expect(r.eligibility?.total_claim_one).toBe("0");
+    expect(r.eligibility?.meets_threshold).toBe(false);
+    expect(r.eligibility?.status).toBe("not_issuing");
     expect(r.notes.some((n) => /vault governor/.test(n))).toBe(true);
   });
 
@@ -155,6 +183,8 @@ describe("claim lookup shape", () => {
     expect(r.wallet_airdrop?.gross_one).toBe("8000");
     expect(r.wallet_airdrop?.not_issued_one).toBe("5000");
     expect(r.wallet_airdrop?.issuable_one).toBe("3000");
+    expect(r.eligibility?.gross_total_claim_one).toBe("10000");
+    expect(r.eligibility?.total_claim_one).toBe("5000");
     expect(r.wallet_airdrop?.destination).toEqual({ address: ADDR.partial, status: "ready" });
     expect(r.vault_positions[0].expected_shares_one).toBe("2000");
   });
@@ -178,6 +208,60 @@ describe("claim lookup shape", () => {
     expect(r.wallet_airdrop?.destination).toEqual({ address: null, status: "hold" });
     expect(r.adjustments[0].kind).toBe("hold");
     expect(r.adjustments[0].title).toBe("Held: smart contract");
+    expect(r.disposition?.code).toBe("multisig_next_stage");
+  });
+
+  it("exposes WONE separately from native wallet value", async () => {
+    const r = await lookup(ADDR.wone);
+    expect(r.components?.native_wallet_airdrop_one).toBe("800");
+    expect(r.components?.wone_balance_one).toBe("300");
+    expect(r.components?.wone_airdrop_one).toBe("300");
+    expect(r.wallet_airdrop?.net_one).toBe("1100");
+    expect(r.eligibility?.qualification_total_one).toBe("1100");
+  });
+
+  it("marks a fully deducted claim as not issuing and not prioritized", async () => {
+    const r = await lookup(ADDR.deducted);
+    expect(r.eligibility?.gross_total_claim_one).toBe("5000");
+    expect(r.eligibility?.total_claim_one).toBe("0");
+    expect(r.eligibility?.meets_threshold).toBe(false);
+    expect(r.eligibility?.status).toBe("not_issuing");
+    expect(r.disposition?.code).toBe("not_issuing");
+  });
+
+  it("routes non-Gate exchange wallets through the exchange", async () => {
+    const r = await lookup(ADDR.exchange);
+    expect(r.disposition?.code).toBe("handled_by_exchange");
+    expect(r.disposition?.title).toBe("Handled by OKX");
+    expect(r.disposition?.destination).toEqual({ address: ADDR.eoa, status: "ready" });
+    expect(r.eligibility?.status).toBe("handled_by_exchange");
+  });
+
+  it("keeps Gate priority explicit and marks deferred Gate routing TBD", async () => {
+    const r = await lookup(ADDR.gate);
+    expect(r.eligibility?.status).toBe("deferred");
+    expect(r.disposition?.code).toBe("gate_aggregate_pending");
+    expect(r.disposition?.detail).toMatch(/still to be determined/);
+    expect(r.wallet_airdrop?.issuable_atto).toBe("0");
+    expect(r.wallet_airdrop?.held_atto).toBe(r.wallet_airdrop?.net_atto);
+    expect(r.wallet_airdrop?.destination).toEqual({ address: null, status: "hold" });
+  });
+
+  it("shows exchange identity without inventing entitlement for a no-claim row", async () => {
+    const r = await lookup(ADDR.exchangeOnly);
+    expect(r.found).toBe(false);
+    expect(r.eligibility).toBeNull();
+    expect(r.disposition?.code).toBe("exchange_no_claim");
+    expect(r.disposition?.destination).toEqual({ address: null, status: "none" });
+    expect(r.exchange_treatments[0].destination).toEqual({ address: null, status: "none" });
+  });
+
+  it("uses dedicated next-stage wording for reviewed contract classes", async () => {
+    const oneWallet = await lookup(ADDR.onewallet);
+    expect(oneWallet.disposition?.title).toBe("To be routed to the 1wallet recovery multisig");
+    const bridge = await lookup(ADDR.bridge);
+    expect(bridge.disposition?.title).toBe("Bridge contract");
+    expect(bridge.disposition?.detail).toMatch(/dedicated claim portal/);
   });
 
   it("unknown address: found=false with a note and meta", async () => {

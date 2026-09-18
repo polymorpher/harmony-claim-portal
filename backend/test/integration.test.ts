@@ -44,6 +44,9 @@ suite("integration against fixture database", () => {
     const body = res.json();
     expect(body.account_type).toBe("excluded");
     expect(body.wallet_airdrop.issuable_atto).toBe("0");
+    expect(body.eligibility.total_claim_atto).toBe("0");
+    expect(body.eligibility.meets_threshold).toBe(false);
+    expect(body.eligibility.status).toBe("not_issuing");
     expect(body.vault_positions).toHaveLength(2);
     for (const p of body.vault_positions) expect(p.expected_shares_atto).toBe("0");
     expect(body.adjustments.every((a: { kind: string }) => a.kind === "deduction")).toBe(true);
@@ -64,6 +67,7 @@ suite("integration against fixture database", () => {
     expect(body.account_type).toBe("contract");
     expect(body.contract_category).toBe("multisig-wallet");
     expect(body.eligibility).toBeNull();
+    expect(body.disposition.code).toBe("multisig_next_stage");
   });
 
   it("deferred fixture account with explicit route and hold remainder", async () => {
@@ -75,6 +79,33 @@ suite("integration against fixture database", () => {
     expect(body.wallet_airdrop.held_one).toBe("300");
     expect(body.wallet_airdrop.issuable_one).toBe("0");
     expect(body.wallet_airdrop.destination.status).toBe("hold");
+    expect(body.disposition.code).toBe("gate_aggregate_pending");
+  });
+
+  it("loads WONE component fields from the fixture", async () => {
+    const res = await app.inject({ method: "GET", url: `/api/v1/claims/${ADDR.eoa}` });
+    const body = res.json();
+    expect(body.components.wone_balance_one).toBe("250");
+    expect(body.components.wone_airdrop_one).toBe("250");
+    expect(body.components.native_wallet_airdrop_atto).not.toBe(body.wallet_airdrop.gross_atto);
+  });
+
+  it("loads exchange-controlled routing metadata", async () => {
+    const exchange = "0xa0ee7a142d267c1f36714e4a8f75612f20a79720";
+    const res = await app.inject({ method: "GET", url: `/api/v1/claims/${exchange}` });
+    const body = res.json();
+    expect(body.exchange_treatments[0].display_name).toBe("OKX");
+    expect(body.disposition.code).toBe("handled_by_exchange");
+  });
+
+  it("does not assign an entitlement or destination to exchange-only inventory", async () => {
+    const exchangeOnly = "0x5555555555555555555555555555555555555555";
+    const res = await app.inject({ method: "GET", url: `/api/v1/claims/${exchangeOnly}` });
+    const body = res.json();
+    expect(body.found).toBe(false);
+    expect(body.eligibility).toBeNull();
+    expect(body.disposition.code).toBe("exchange_no_claim");
+    expect(body.exchange_treatments[0].destination.status).toBe("none");
   });
 
   it("unknown address", async () => {

@@ -6,6 +6,7 @@ import type {
   AccountRow,
   ClaimRepository,
   DelegationRow,
+  ExchangeRow,
   ExceptionRow,
   ReasonText,
   SnapshotMeta,
@@ -23,28 +24,50 @@ export const ADDR = {
   excl: "0x15d34aaf54267db7d7c367839aaf71a00a2c6a65",
   partial: "0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc",
   safe: "0x976ea74026e726554db657fa54763abd0c3a0aa9",
-  unknown: "0xa0ee7a142d267c1f36714e4a8f75612f20a79720",
+  wone: "0x14dc79964da2c08b23698b3d3cc7ca32193d9955",
+  gate: "0x23618e81e3f5cdf7f54c3d65f7fbc0abf5b21e8f",
+  exchange: "0xa0ee7a142d267c1f36714e4a8f75612f20a79720",
+  onewallet: "0x1111111111111111111111111111111111111111",
+  bridge: "0x2222222222222222222222222222222222222222",
+  deducted: "0x3333333333333333333333333333333333333333",
+  unknown: "0x4444444444444444444444444444444444444444",
+  exchangeOnly: "0x5555555555555555555555555555555555555555",
 } as const;
 
 export function account(partial: Partial<AccountRow> & { address: string }): AccountRow {
   const wallet = partial.wallet_airdrop_atto ?? "0";
   const staked = partial.staked_to_vault_atto ?? "0";
+  const nativeWallet = partial.native_wallet_airdrop_atto ?? wallet;
+  const woneBalance = partial.wone_balance_atto ?? "0";
+  const woneAirdrop = partial.wone_airdrop_atto ?? "0";
+  const nativeTotal = partial.native_total_claim_atto ?? (BigInt(nativeWallet) + BigInt(staked)).toString();
+  const qualification = partial.qualification_total_atto ?? (BigInt(nativeTotal) + BigInt(woneBalance)).toString();
+  const total = partial.total_claim_atto ?? (BigInt(wallet) + BigInt(staked)).toString();
   return {
     secure_key: "00".repeat(32),
     address_resolved: true,
     account_category: "ordinary_eoa",
     code_bearing: false,
     contract_primary_category: null,
-    liquid_shard0_atto: wallet,
+    contract_subcategory: null,
+    contract_identity: null,
+    contract_treatment: null,
+    policy_category: BigInt(qualification) >= 1000n * ONE ? "automatic" : "deferred",
+    liquid_shard0_atto: nativeWallet,
     liquid_shard1_atto: "0",
     active_staked_or_delegated_atto: staked,
     pending_undelegation_atto: "0",
     unclaimed_staking_reward_atto: "0",
     pending_cross_shard_atto: "0",
+    native_wallet_airdrop_atto: nativeWallet,
+    wone_balance_atto: woneBalance,
+    wone_airdrop_atto: woneAirdrop,
     wallet_airdrop_atto: wallet,
     staked_to_vault_atto: staked,
-    total_claim_atto: (BigInt(wallet) + BigInt(staked)).toString(),
-    meets_threshold: BigInt(wallet) + BigInt(staked) >= 1000n * ONE,
+    qualification_total_atto: qualification,
+    native_total_claim_atto: nativeTotal,
+    total_claim_atto: total,
+    meets_threshold: BigInt(qualification) >= 1000n * ONE,
     last_activity_time_utc: null,
     last_activity_block: null,
     last_activity_shard: null,
@@ -76,8 +99,43 @@ export const accounts: AccountRow[] = [
     account_category: "contract",
     code_bearing: true,
     contract_primary_category: "multisig-wallet",
+    contract_subcategory: "gnosis-safe",
+    contract_identity: "2-of-3 fixture Safe",
+    contract_treatment: "multisig_next_stage",
+    policy_category: "contract_review",
     wallet_airdrop_atto: one(50_000),
   }),
+  account({
+    address: ADDR.wone,
+    native_wallet_airdrop_atto: one(800),
+    wone_balance_atto: one(300),
+    wone_airdrop_atto: one(300),
+    wallet_airdrop_atto: one(1100),
+    qualification_total_atto: one(1100),
+    native_total_claim_atto: one(800),
+    total_claim_atto: one(1100),
+  }),
+  account({ address: ADDR.gate, wallet_airdrop_atto: one(500) }),
+  account({ address: ADDR.exchange, wallet_airdrop_atto: one(1500), policy_category: "excluded" }),
+  account({
+    address: ADDR.onewallet,
+    account_category: "contract",
+    code_bearing: true,
+    contract_primary_category: "onewallet",
+    contract_treatment: "onewallet_recovery",
+    policy_category: "contract_review",
+    wallet_airdrop_atto: one(2000),
+  }),
+  account({
+    address: ADDR.bridge,
+    account_category: "contract",
+    code_bearing: true,
+    contract_primary_category: "known-app",
+    contract_treatment: "bridge_later_portal",
+    policy_category: "contract_review",
+    wallet_airdrop_atto: one(3000),
+  }),
+  account({ address: ADDR.deducted, wallet_airdrop_atto: one(5000) }),
 ];
 
 export const delegations: DelegationRow[] = [
@@ -114,10 +172,45 @@ export const exceptions: ExceptionRow[] = [
   ex({ component: "vault_shares", source_address: ADDR.excl, validator_address: ADDR.v2, amount_atto: one(1000), exception_type: "explicit_route", destination_status: "not_issuing", destination_id: "not-issuing", reason: "not_issuing_blacklisted_extra_mint_recipient", source_category: "excluded" }),
   ex({ component: "wallet_airdrop", source_address: ADDR.partial, amount_atto: one(5000), exception_type: "explicit_route", destination_status: "not_issuing", destination_id: "not-issuing", reason: "not_issuing_blacklisted_extra_mint_recipient" }),
   ex({ component: "wallet_airdrop", source_address: ADDR.safe, amount_atto: one(50_000), exception_type: "contract_review_hold", destination_status: "hold", reason: "contract_review", source_category: "contract_review", route_priority: 1_000_000 }),
+  ex({ component: "wallet_airdrop", source_address: ADDR.deducted, amount_atto: one(5000), exception_type: "explicit_route", destination_status: "not_issuing", destination_id: "not-issuing", reason: "not_issuing_burn_or_inaccessible", source_category: "excluded" }),
+];
+
+export const exchangeWallets: ExchangeRow[] = [
+  {
+    exchange_id: "gate",
+    display_name: "Gate",
+    address: ADDR.gate,
+    delivery_policy: "automatic_threshold",
+    qualification_status: "below_threshold",
+    planned_delivery_status: "below_threshold_not_airdropped",
+    configured_destination: null,
+    configured_destination_status: "not_required_same_address",
+  },
+  {
+    exchange_id: "okx",
+    display_name: "OKX",
+    address: ADDR.exchange,
+    delivery_policy: "manual_current_claim",
+    qualification_status: "qualified",
+    planned_delivery_status: "manual_exchange_route",
+    configured_destination: ADDR.eoa,
+    configured_destination_status: "ready",
+  },
+  {
+    exchange_id: "mexc",
+    display_name: "MEXC",
+    address: ADDR.exchangeOnly,
+    delivery_policy: "manual_current_claim",
+    qualification_status: "below_threshold",
+    planned_delivery_status: "no_cutoff_claim",
+    configured_destination: ADDR.eoa,
+    configured_destination_status: "ready",
+  },
 ];
 
 export const reasonTexts: Record<string, ReasonText> = {
   not_issuing_blacklisted_extra_mint_recipient: { title: "Deduction: extra-mint", user_text: "not returned" },
+  not_issuing_burn_or_inaccessible: { title: "Deduction: inaccessible", user_text: "retained in reserve" },
   contract_review: { title: "Held: smart contract", user_text: "later phase" },
   "verified validator wrapper same-address": { title: "Verified validator account", user_text: "same address" },
 };
@@ -150,6 +243,9 @@ export class MemoryRepository implements ClaimRepository {
   }
   async getExceptions(a: string): Promise<ExceptionRow[]> {
     return exceptions.filter((e) => e.source_address === a);
+  }
+  async getExchangeWallets(a: string): Promise<ExchangeRow[]> {
+    return exchangeWallets.filter((e) => e.address === a);
   }
   async getVaults(vs: string[]): Promise<VaultRow[]> {
     return vaults.filter((v) => vs.includes(v.validator_address));
