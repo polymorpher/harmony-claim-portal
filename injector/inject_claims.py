@@ -38,6 +38,7 @@ DATA_TABLES = (
     "validator_vaults",
     "routing_exceptions",
     "routing_destinations",
+    "exchange_wallets",
 )
 
 ACCOUNT_COLUMNS = (
@@ -47,14 +48,23 @@ ACCOUNT_COLUMNS = (
     "account_category",
     "code_bearing",
     "contract_primary_category",
+    "contract_subcategory",
+    "contract_identity",
+    "contract_treatment",
+    "policy_category",
     "liquid_shard0_atto",
     "liquid_shard1_atto",
     "active_staked_or_delegated_atto",
     "pending_undelegation_atto",
     "unclaimed_staking_reward_atto",
     "pending_cross_shard_atto",
+    "native_wallet_airdrop_atto",
+    "wone_balance_atto",
+    "wone_airdrop_atto",
     "wallet_airdrop_atto",
     "staked_to_vault_atto",
+    "qualification_total_atto",
+    "native_total_claim_atto",
     "total_claim_atto",
     "meets_threshold",
     "nonce_shard0",
@@ -103,6 +113,16 @@ EXCEPTION_COLUMNS = (
     "evidence",
 )
 DESTINATION_COLUMNS = ("destination_id", "destination_address", "status", "notes")
+EXCHANGE_COLUMNS = (
+    "exchange_id",
+    "display_name",
+    "address",
+    "delivery_policy",
+    "qualification_status",
+    "planned_delivery_status",
+    "configured_destination",
+    "configured_destination_status",
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -256,6 +276,7 @@ class Dataset:
     meta: dict[str, Any]
     destinations: list[tuple]
     exceptions: list[tuple]
+    exchange_wallets: list[tuple]
     vaults: list[list]  # mutable so validator names can be filled in
     delegations: list[tuple]
     accounts: Callable[[], Iterator[tuple]]  # streaming factory
@@ -274,9 +295,9 @@ class Inputs:
         routing = repo / "routing/local"
         self.all_accounts = claims / "all-address-migration-claims-cutoff-metadata.csv"
         self.activity = claims / "migration-claims-at-least-1000-one-metadata-activity.csv"
-        self.base_automatic = review / "base-automatic-wallet.csv"
-        self.base_contract = review / "base-contract-wallet.csv"
-        self.base_excluded = review / "base-excluded-wallet.csv"
+        self.policy_automatic = review / "policy-automatic.csv"
+        self.policy_contract = review / "policy-genuine-contract-review.csv"
+        self.policy_excluded = review / "policy-excluded.csv"
         self.validator_policy = review / "validator-policy-accounts.csv"
         self.contract_policy = review / "contract-review-policy.csv"
         self.priority_shares = review / "base-priority-vault-shares.csv"
@@ -285,15 +306,27 @@ class Inputs:
         self.routing_exceptions = routing / "generated/routing-exceptions.csv"
         self.governor_exceptions = routing / "generated/validator-governor-exceptions.csv"
         self.destinations = routing / "destinations.csv"
+        self.exchange_destinations = routing / "exchange-destinations.csv"
+        self.exchange_policy = repo / "exchanges/exchange-policy.json"
+        self.exchange_audits = repo / "artifacts/exchange-accounting-20260917/audits"
         self.manifest = repo / "manifests/snapshot-2026-09-10.json"
-        self.routing_summary = repo / "results/2026-09-11/destination-mapping/routing-summary.json"
+        self.routing_summary = routing / "generated/routing-summary.json"
+
+    def exchange_audit_paths(self) -> list[Path]:
+        if not self.exchange_policy.is_file():
+            return []
+        policy = json.loads(self.exchange_policy.read_text())
+        return [
+            self.exchange_audits / f"{row['id']}.csv"
+            for row in policy.get("exchanges", [])
+        ]
 
     def required(self, with_activity: bool) -> list[Path]:
         paths = [
             self.all_accounts,
-            self.base_automatic,
-            self.base_contract,
-            self.base_excluded,
+            self.policy_automatic,
+            self.policy_contract,
+            self.policy_excluded,
             self.validator_policy,
             self.contract_policy,
             self.priority_shares,
@@ -302,6 +335,9 @@ class Inputs:
             self.routing_exceptions,
             self.governor_exceptions,
             self.destinations,
+            self.exchange_destinations,
+            self.exchange_policy,
+            *self.exchange_audit_paths(),
             self.manifest,
             self.routing_summary,
         ]
@@ -339,12 +375,27 @@ def build_real_dataset(
     threshold = int(manifest["eligibility_1000_one"]["threshold_atto"])
 
     # --- classification sets -------------------------------------------------
+    policy_categories: dict[str, str] = {}
+    for path, category in (
+        (inputs.policy_automatic, "automatic"),
+        (inputs.policy_contract, "contract_review"),
+        (inputs.policy_excluded, "excluded"),
+    ):
+        for row in read_csv(path):
+            a = norm_address(row["address"])
+            if a:
+                previous = policy_categories.setdefault(a, category)
+                if previous != category:
+                    raise ValueError(
+                        f"address {a} appears in policy categories {previous} and {category}"
+                    )
+
     validators: set[str] = set()
     for row in read_csv(inputs.validator_policy):
         a = norm_address(row["address"])
         if a:
             validators.add(a)
-    contracts: dict[str, str] = {}
+    contracts: dict[str, dict[str, str | None]] = {}
     for row in read_csv(inputs.contract_policy):
         a = norm_address(row["address"])
         if a is None:
@@ -352,38 +403,95 @@ def build_real_dataset(
         if row["primary_category"] == "validator-account":
             validators.add(a)
         else:
-            contracts.setdefault(a, row["primary_category"])
-    excluded: set[str] = set()
-    for row in read_csv(inputs.base_excluded):
-        a = norm_address(row["source_address"])
-        if a:
-            excluded.add(a)
-    for row in read_csv(inputs.base_contract):
-        a = norm_address(row["source_address"])
-        if a and a not in contracts:
-            contracts[a] = "unclassified-contract-review"
-            warnings.append(f"contract wallet {a} missing from contract-review-policy.csv")
-    automatic: set[str] = set()
-    for row in read_csv(inputs.base_automatic):
-        a = norm_address(row["source_address"])
-        if a:
-            automatic.add(a)
+            known_app = (row.get("known_app") or "").strip()
+            role = (row.get("known_app_role") or "").strip()
+            primary = row["primary_category"].strip()
+            if parse_bool(row.get("is_multisig") or "") or primary == "multisig-wallet":
+                treatment = "multisig_next_stage"
+            elif parse_bool(row.get("is_onewallet") or "") or primary == "onewallet":
+                treatment = "onewallet_recovery"
+            elif known_app == "Harmony LayerZero bridge (native ONE lock for bridged ONE)" or role.startswith("NativeOFT 'ONE for "):
+                treatment = "bridge_later_portal"
+            else:
+                treatment = None
+            contracts[a] = {
+                "primary": primary,
+                "subcategory": opt(row.get("subcategory")),
+                "identity": opt(row.get("identity")),
+                "treatment": treatment,
+            }
+    excluded = {a for a, category in policy_categories.items() if category == "excluded"}
+    automatic = {a for a, category in policy_categories.items() if category == "automatic"}
+    contract_review = {
+        a for a, category in policy_categories.items() if category == "contract_review"
+    }
     log(
         f"classification: validators={len(validators)} contracts={len(contracts)} "
-        f"excluded={len(excluded)} automatic={len(automatic)}"
+        f"excluded={len(excluded)} automatic={len(automatic)} "
+        f"contract_review={len(contract_review)}"
     )
 
     # --- destinations ----------------------------------------------------------
     destinations = []
-    for row in read_csv(inputs.destinations):
-        destinations.append(
-            (
-                row["destination_id"].strip(),
-                norm_address(row.get("destination_address")),
-                row["status"].strip(),
-                (row.get("notes") or "").strip(),
+    destination_ids: set[str] = set()
+    destination_records: dict[str, tuple[str | None, str]] = {}
+    for path in (inputs.destinations, inputs.exchange_destinations):
+        for row in read_csv(path):
+            destination_id = row["destination_id"].strip()
+            if destination_id in destination_ids:
+                raise ValueError(f"duplicate destination_id {destination_id!r}")
+            destination_ids.add(destination_id)
+            status = row["status"].strip()
+            if status not in ("ready", "hold", "not_issuing", "redistributed"):
+                raise ValueError(f"unknown destination status {status!r}")
+            destination_address = norm_address(row.get("destination_address"))
+            destination_records[destination_id] = (destination_address, status)
+            destinations.append(
+                (
+                    destination_id,
+                    destination_address,
+                    status,
+                    (row.get("notes") or "").strip(),
+                )
             )
-        )
+
+    # --- exchange-controlled wallet UI metadata -------------------------------
+    exchange_policy = json.loads(inputs.exchange_policy.read_text())
+    exchange_wallets: list[tuple] = []
+    seen_exchange_wallets: set[tuple[str, str]] = set()
+    for exchange in exchange_policy.get("exchanges", []):
+        exchange_id = exchange["id"].strip()
+        display_name = exchange["display_name"].strip()
+        delivery_policy = exchange["delivery_policy"].strip()
+        audit_path = inputs.exchange_audits / f"{exchange_id}.csv"
+        for row in read_csv(audit_path):
+            address = norm_address(row.get("address_hex"))
+            if address is None:
+                raise ValueError(f"{audit_path}: exchange row without address_hex")
+            key = (exchange_id, address)
+            if key in seen_exchange_wallets:
+                raise ValueError(f"duplicate exchange wallet {exchange_id}:{address}")
+            seen_exchange_wallets.add(key)
+            configured_destination = norm_address(row.get("configured_destination"))
+            configured_status = (row.get("configured_destination_status") or "hold").strip()
+            if delivery_policy == "manual_current_claim":
+                destination = destination_records.get(f"exchange-{exchange_id}")
+                if destination is None:
+                    raise ValueError(f"missing aggregate destination for exchange {exchange_id}")
+                configured_destination, configured_status = destination
+            exchange_wallets.append(
+                (
+                    exchange_id,
+                    display_name,
+                    address,
+                    delivery_policy,
+                    (row.get("qualification_status") or "unknown").strip(),
+                    (row.get("planned_delivery_status") or "unknown").strip(),
+                    configured_destination,
+                    configured_status,
+                )
+            )
+    log(f"exchange wallets: {len(exchange_wallets)}")
 
     # --- routing exceptions ----------------------------------------------------
     exceptions = []
@@ -397,7 +505,7 @@ def build_real_dataset(
             raise ValueError("routing exception without source address")
         amount = parse_int(row["amount_atto"], "exception amount")
         status = row["destination_status"].strip()
-        if status not in ("ready", "hold", "not_issuing"):
+        if status not in ("ready", "hold", "not_issuing", "redistributed"):
             raise ValueError(f"unknown destination_status {status!r}")
         exceptions.append(
             (
@@ -517,11 +625,31 @@ def build_real_dataset(
                     "pending_undelegation_atto",
                     "unclaimed_staking_reward_atto",
                     "pending_cross_shard_atto",
+                    "native_wallet_airdrop_atto",
+                    "wone_balance_atto",
+                    "wone_airdrop_atto",
                     "wallet_airdrop_atto",
                     "staked_to_vault_atto",
+                    "qualification_total_atto",
+                    "native_total_claim_atto",
                     "total_claim_atto",
                 )
             }
+            if (
+                amounts["native_wallet_airdrop_atto"] + amounts["staked_to_vault_atto"]
+                != amounts["native_total_claim_atto"]
+            ):
+                raise ValueError(f"row {n}: native wallet + staked != native total for {address or secure_key}")
+            if (
+                amounts["native_total_claim_atto"] + amounts["wone_balance_atto"]
+                != amounts["qualification_total_atto"]
+            ):
+                raise ValueError(f"row {n}: native total + WONE != qualification total for {address or secure_key}")
+            if (
+                amounts["native_wallet_airdrop_atto"] + amounts["wone_airdrop_atto"]
+                != amounts["wallet_airdrop_atto"]
+            ):
+                raise ValueError(f"row {n}: native wallet + WONE airdrop != wallet total for {address or secure_key}")
             if amounts["wallet_airdrop_atto"] + amounts["staked_to_vault_atto"] != amounts["total_claim_atto"]:
                 raise ValueError(f"row {n}: wallet + staked != total for {address or secure_key}")
             code0 = opt(row.get("code_hash_shard0"))
@@ -529,21 +657,38 @@ def build_real_dataset(
             code_bearing = any(
                 c is not None and c.lower() != EMPTY_CODE_HASH for c in (code0, code1)
             )
+            details = contracts.get(address) if address is not None else None
             primary: str | None = None
+            subcategory: str | None = None
+            identity: str | None = None
+            treatment: str | None = None
+            policy_category = policy_categories.get(address, "deferred")
             if address in excluded:
                 category = "excluded"
             elif address in validators:
                 category = "validator_account"
-            elif address in contracts:
+            elif details is not None or address in contract_review:
                 category = "contract"
-                primary = contracts[address]
+                primary = str(details["primary"]) if details else "unclassified-contract-review"
+                subcategory = details["subcategory"] if details else None
+                identity = details["identity"] if details else None
+                treatment = details["treatment"] if details else None
             elif code_bearing:
                 category = "contract"
                 primary = "unreviewed-code-bearing"
             else:
                 category = "ordinary_eoa"
-            meets = amounts["total_claim_atto"] >= threshold
+            meets = amounts["qualification_total_atto"] >= threshold
+            categorized_as_priority = policy_category in ("automatic", "contract_review", "excluded")
+            if limit is None and resolved and meets != categorized_as_priority:
+                raise ValueError(
+                    f"row {n}: threshold/category mismatch for {address}: "
+                    f"meets={meets} policy={policy_category}"
+                )
             counts[category] += 1
+            counts[f"policy_{policy_category}"] += 1
+            if treatment:
+                counts[f"treatment_{treatment}"] += 1
             if meets:
                 counts["meets_threshold"] += 1
             if address is not None:
@@ -565,14 +710,23 @@ def build_real_dataset(
                 category,
                 code_bearing,
                 primary,
+                subcategory,
+                identity,
+                treatment,
+                policy_category,
                 amounts["liquid_shard0_atto"],
                 amounts["liquid_shard1_atto"],
                 amounts["active_staked_or_delegated_atto"],
                 amounts["pending_undelegation_atto"],
                 amounts["unclaimed_staking_reward_atto"],
                 amounts["pending_cross_shard_atto"],
+                amounts["native_wallet_airdrop_atto"],
+                amounts["wone_balance_atto"],
+                amounts["wone_airdrop_atto"],
                 amounts["wallet_airdrop_atto"],
                 amounts["staked_to_vault_atto"],
+                amounts["qualification_total_atto"],
+                amounts["native_total_claim_atto"],
                 amounts["total_claim_atto"],
                 meets,
                 opt_int(row.get("nonce_shard0")),
@@ -619,7 +773,10 @@ def build_real_dataset(
         "cutoff": manifest["cutoff"],
         "valuation": manifest.get("valuation", {}),
         "threshold_atto": str(threshold),
-        "eligibility": manifest["eligibility_1000_one"],
+        "eligibility": {
+            **manifest["eligibility_1000_one"],
+            "field": "qualification_total_atto",
+        },
         "data_version": data_version,
         "routing": {
             "status": routing_summary.get("status"),
@@ -632,6 +789,7 @@ def build_real_dataset(
         meta=meta,
         destinations=destinations,
         exceptions=exceptions,
+        exchange_wallets=exchange_wallets,
         vaults=vaults,
         delegations=delegations,
         accounts=accounts,
@@ -676,13 +834,32 @@ def build_fixture_dataset(data_version: str) -> Dataset:
         undelegation=0,
         reward=0,
         cross=0,
+        wone_balance=0,
         code_bearing=False,
         primary=None,
+        subcategory=None,
+        identity=None,
+        treatment=None,
+        policy_category=None,
         secure_key: str | None = None,
         activity: tuple | None = None,
     ) -> tuple:
-        wallet = liquid0 + liquid1 + undelegation + reward + cross
+        native_wallet = liquid0 + liquid1 + undelegation + reward + cross
+        native_total = native_wallet + staked
+        qualification_total = native_total + wone_balance
+        meets = qualification_total >= threshold
+        wone_airdrop = wone_balance if meets else 0
+        wallet = native_wallet + wone_airdrop
         total = wallet + staked
+        if policy_category is None:
+            if not meets:
+                policy_category = "deferred"
+            elif category == "excluded":
+                policy_category = "excluded"
+            elif category == "contract":
+                policy_category = "contract_review"
+            else:
+                policy_category = "automatic"
         key = secure_key or secure_key_of(address)  # type: ignore[arg-type]
         act = activity or (None,) * 8
         return (
@@ -692,16 +869,25 @@ def build_fixture_dataset(data_version: str) -> Dataset:
             category,
             code_bearing,
             primary,
+            subcategory,
+            identity,
+            treatment,
+            policy_category,
             liquid0,
             liquid1,
             staked,
             undelegation,
             reward,
             cross,
+            native_wallet,
+            wone_balance,
+            wone_airdrop,
             wallet,
             staked,
+            qualification_total,
+            native_total,
             total,
-            total >= threshold,
+            meets,
             7,
             0,
             ("0x" + "f1" * 32) if code_bearing else EMPTY_CODE_HASH,
@@ -721,13 +907,15 @@ def build_fixture_dataset(data_version: str) -> Dataset:
     )
     accounts = [
         acct(eoa, "ordinary_eoa", liquid0=5000 * ONE, liquid1=250 * ONE, undelegation=10 * ONE,
-             reward=15 * ONE // 10, staked=2000 * ONE, activity=activity),
+             reward=15 * ONE // 10, staked=2000 * ONE, wone_balance=250 * ONE, activity=activity),
         acct(small, "ordinary_eoa", liquid0=7 * ONE, staked=5 * ONE),
         acct(v1, "validator_account", liquid0=300 * ONE, staked=10_000 * ONE, code_bearing=True),
         acct(v2, "validator_account", liquid0=100 * ONE, staked=20_000 * ONE, code_bearing=True),
         acct(excl, "excluded", liquid0=1000 * ONE, staked=4000 * ONE),
         acct(partial, "ordinary_eoa", liquid0=8000 * ONE, staked=2000 * ONE),
-        acct(safe, "contract", liquid0=50_000 * ONE, code_bearing=True, primary="multisig-wallet"),
+        acct(safe, "contract", liquid0=50_000 * ONE, code_bearing=True, primary="multisig-wallet",
+             subcategory="gnosis-safe", identity="2-of-3 fixture Safe",
+             treatment="multisig_next_stage"),
         acct(wone, "contract", liquid0=1_000_000 * ONE, code_bearing=True, primary="erc20-token"),
         acct(deferred, "ordinary_eoa", liquid0=500 * ONE),
         acct(deleg, "ordinary_eoa", liquid0=100 * ONE, staked=1500 * ONE),
@@ -751,8 +939,10 @@ def build_fixture_dataset(data_version: str) -> Dataset:
     ]
     destinations = [
         ("not-issuing", None, "not_issuing", "terminal non-issuance"),
+        ("wone-holder-redistribution", None, "redistributed", "terminal source offset"),
         ("contract-recovery-custody", None, "hold", "segregated recovery custody, address pending"),
         ("treasury", None, "hold", ""),
+        ("exchange-okx", eoa, "ready", "synthetic exchange aggregate"),
     ]
     vw = "verified validator wrapper same-address"
     ev = "artifacts/contract-review-20260911/out/validator-policy-accounts.csv"
@@ -783,8 +973,14 @@ def build_fixture_dataset(data_version: str) -> Dataset:
         # Safe multisig: hold pending replacement Safe
         ("wallet_airdrop", safe, "contract_review", None, 50_000 * ONE, "contract_review_hold",
          "default-safe", 1_000_000, None, None, "hold", "contract_review", ""),
-        # WONE-like contract routed to custody (held until address supplied)
-        ("wallet_airdrop", wone, "contract_review", None, 1_000_000 * ONE, "explicit_route",
+        # WONE-like reserve: holder offset + retained reserve + shard residual.
+        ("wallet_airdrop", wone, "contract_review", None, 900_000 * ONE, "explicit_route",
+         "wone-priority-holder-redistribution", 400, "wone-holder-redistribution", None,
+         "redistributed", "wone_priority_holder_redistribution", "fixture WONE accounting"),
+        ("wallet_airdrop", wone, "contract_review", None, 90_000 * ONE, "explicit_route",
+         "wone-reserve-remainder-not-issued", 401, "not-issuing", None, "not_issuing",
+         "wone_reserve_remainder_retained_not_issued", "fixture WONE accounting"),
+        ("wallet_airdrop", wone, "contract_review", None, 10_000 * ONE, "explicit_route",
          "contract-custody-fixture-wone", 500, "contract-recovery-custody", None, "hold",
          "non_multisig_contract_recovery_custody", "contract review"),
         # deferred account with an explicit partial route and a deferred hold remainder
@@ -793,6 +989,38 @@ def build_fixture_dataset(data_version: str) -> Dataset:
          "not_issuing_reported_wallet_theft_perpetrator", "fixture theft report"),
         ("wallet_airdrop", deferred, "deferred", None, 300 * ONE, "deferred_hold",
          "default-deferred", 1_000_000, None, None, "hold", "deferred", ""),
+    ]
+    exchange_wallets = [
+        (
+            "gate",
+            "Gate",
+            deferred,
+            "automatic_threshold",
+            "below_threshold",
+            "below_threshold_not_airdropped",
+            None,
+            "not_required_same_address",
+        ),
+        (
+            "okx",
+            "OKX",
+            deleg,
+            "manual_current_claim",
+            "qualified",
+            "manual_exchange_route",
+            eoa,
+            "ready",
+        ),
+        (
+            "mexc",
+            "MEXC",
+            "0x5555555555555555555555555555555555555555",
+            "manual_current_claim",
+            "below_threshold",
+            "no_cutoff_claim",
+            eoa,
+            "ready",
+        ),
     ]
     meta = {
         "cutoff": {
@@ -805,7 +1033,7 @@ def build_fixture_dataset(data_version: str) -> Dataset:
         "valuation": {"usd_per_one": "0.01", "reference_shard0_block": 93_623_067,
                       "note": "fixture"},
         "threshold_atto": str(threshold),
-        "eligibility": {"threshold_atto": str(threshold), "field": "total_claim_atto",
+        "eligibility": {"threshold_atto": str(threshold), "field": "qualification_total_atto",
                         "equality_policy": "include",
                         "selected_comparison": "greater-than-or-equal"},
         "data_version": data_version,
@@ -818,6 +1046,7 @@ def build_fixture_dataset(data_version: str) -> Dataset:
         meta=meta,
         destinations=destinations,
         exceptions=exceptions,
+        exchange_wallets=exchange_wallets,
         vaults=vaults,
         delegations=delegations,
         accounts=lambda: iter(accounts),
@@ -893,15 +1122,22 @@ def load_into_db(ds: Dataset, dsn: str, data_version: str, started: dt.datetime)
             cur.execute("SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='accounts'")
             if cur.fetchone() is None:
                 sys.exit("error: schema not applied; run db/migrations/001_schema.sql first")
+            cur.execute(
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema='public' AND table_name='exchange_wallets'"
+            )
+            if cur.fetchone() is None:
+                sys.exit("error: WONE policy schema not applied; run db/migrations/002_wone_policy.sql")
             cur.execute(f"DROP SCHEMA IF EXISTS {STAGING} CASCADE")
             cur.execute(f"CREATE SCHEMA {STAGING}")
             for t in DATA_TABLES:
                 cur.execute(f"CREATE TABLE {STAGING}.{t} (LIKE public.{t} INCLUDING ALL)")
             conn.commit()
 
-            log("copying destinations, exceptions, vaults, delegations")
+            log("copying destinations, exceptions, exchange wallets, vaults, delegations")
             counts["routing_destinations"] = copy_rows(cur, "routing_destinations", DESTINATION_COLUMNS, ds.destinations)
             counts["routing_exceptions"] = copy_rows(cur, "routing_exceptions", EXCEPTION_COLUMNS, ds.exceptions)
+            counts["exchange_wallets"] = copy_rows(cur, "exchange_wallets", EXCHANGE_COLUMNS, ds.exchange_wallets)
             counts["validator_vaults"] = copy_rows(cur, "validator_vaults", VAULT_COLUMNS, (tuple(v) for v in ds.vaults))
             counts["delegations"] = copy_rows(cur, "delegations", DELEGATION_COLUMNS, ds.delegations)
             log("copying accounts")
@@ -993,6 +1229,7 @@ def main(argv: list[str] | None = None) -> int:
             "validator_vaults": len(ds.vaults),
             "routing_exceptions": len(ds.exceptions),
             "routing_destinations": len(ds.destinations),
+            "exchange_wallets": len(ds.exchange_wallets),
         }
     else:
         counts = load_into_db(ds, args.dsn, args.data_version, started)
@@ -1004,6 +1241,16 @@ def main(argv: list[str] | None = None) -> int:
         "data_version": args.data_version,
         "row_counts": counts,
         "account_categories": {k: v for k, v in stats.items() if k in CATEGORIES},
+        "policy_categories": {
+            k.removeprefix("policy_"): v
+            for k, v in stats.items()
+            if k.startswith("policy_")
+        },
+        "contract_treatments": {
+            k.removeprefix("treatment_"): v
+            for k, v in stats.items()
+            if k.startswith("treatment_")
+        },
         "meets_threshold": stats.get("meets_threshold"),
         "warnings": ds.warnings,
         "elapsed_seconds": round(time.monotonic() - t0, 1),

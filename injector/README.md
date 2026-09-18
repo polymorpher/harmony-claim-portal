@@ -1,8 +1,9 @@
 # Claim injector
 
-`inject_claims.py` reads the harmony-migration cutoff claims, contract-review
-outputs, vault-share ledgers and sparse routing exceptions from a local
-`harmony-migration` checkout and loads them into the claim portal database.
+`inject_claims.py` reads the WONE-aware cutoff claims, final account-policy
+categories, contract treatments, exchange audits, vault-share ledgers, and
+sparse routing exceptions from a local `harmony-migration` checkout and loads
+them into the claim portal database.
 
 The load is atomic: every data table is filled in a `claims_staging` schema
 with `COPY`, verified, and then swapped into `public` inside one transaction,
@@ -32,7 +33,7 @@ python3 inject_claims.py --fixture --dsn "$(../scripts/dev-postgres.sh url claim
 PGPASSWORD=... python3 inject_claims.py \
   --migration-repo ~/git/harmony-migration \
   --dsn postgres://claimapi@localhost:5433/claims \
-  --data-version 2026-09-11 --validator-names
+  --data-version 2026-09-17 --validator-names
 ```
 
 Flags:
@@ -50,8 +51,12 @@ Flags:
 
 - `keccak256(address) == secure_key` for every resolved address (hard error);
 - `wallet_airdrop + staked_to_vault == total_claim` per row (hard error);
+- `native_total_claim + wone_balance == qualification_total` and
+  `native_wallet_airdrop + wone_airdrop == wallet_airdrop` (hard errors);
 - exception sums per `(source, component)` never exceed the source component
   (hard error);
+- only `ready`, `hold`, `not_issuing`, and terminal `redistributed` routing
+  statuses are accepted (hard error);
 - delegation sums per delegator equal the account's `staked_to_vault`
   (reported as warnings);
 - every referenced validator has a vault row (hard error).
