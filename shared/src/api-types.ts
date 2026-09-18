@@ -4,10 +4,22 @@
  */
 
 export type AccountType = "ordinary_eoa" | "validator_account" | "contract" | "excluded";
-export type EligibilityStatus = "prioritized" | "deferred";
-export type DestinationStatus = "ready" | "hold" | "not_issuing" | "none";
-export type AdjustmentKind = "deduction" | "hold" | "redirect" | "same_address";
+export type EligibilityStatus = "prioritized" | "deferred" | "not_issuing" | "handled_by_exchange";
+export type DestinationStatus = "ready" | "hold" | "not_issuing" | "redistributed" | "none";
+export type AdjustmentKind = "deduction" | "redistribution" | "hold" | "redirect" | "same_address";
 export type Component = "wallet_airdrop" | "vault_shares";
+export type DispositionCode =
+  | "automatic_same_address"
+  | "deferred"
+  | "not_issuing"
+  | "handled_by_exchange"
+  | "exchange_no_claim"
+  | "gate_aggregate_pending"
+  | "multisig_next_stage"
+  | "onewallet_recovery"
+  | "bridge_later_portal"
+  | "contract_recovery"
+  | "hold";
 
 export interface AddressForms {
   /** lowercase 0x hex */
@@ -36,11 +48,22 @@ export interface MetaResponse {
   data_version: string | null;
   loaded_at: string | null;
   fixture: boolean;
+  routing_status: string | null;
+  pending_policy_decisions: string[];
 }
 
 export interface Eligibility {
+  /** Post-deduction claim. Kept under the original field name for API compatibility. */
   total_claim_atto: string;
   total_claim_one: string;
+  gross_total_claim_atto: string;
+  gross_total_claim_one: string;
+  not_issued_atto: string;
+  not_issued_one: string;
+  redistributed_atto: string;
+  redistributed_one: string;
+  qualification_total_atto: string;
+  qualification_total_one: string;
   meets_threshold: boolean;
   status: EligibilityStatus;
 }
@@ -58,10 +81,20 @@ export interface Components {
   unclaimed_staking_reward_one: string;
   pending_cross_shard_atto: string;
   pending_cross_shard_one: string;
+  native_wallet_airdrop_atto: string;
+  native_wallet_airdrop_one: string;
+  wone_balance_atto: string;
+  wone_balance_one: string;
+  wone_airdrop_atto: string;
+  wone_airdrop_one: string;
   wallet_airdrop_atto: string;
   wallet_airdrop_one: string;
   staked_to_vault_atto: string;
   staked_to_vault_one: string;
+  qualification_total_atto: string;
+  qualification_total_one: string;
+  native_total_claim_atto: string;
+  native_total_claim_one: string;
 }
 
 export interface Destination {
@@ -74,8 +107,12 @@ export interface WalletAirdrop {
   gross_one: string;
   not_issued_atto: string;
   not_issued_one: string;
+  redistributed_atto: string;
+  redistributed_one: string;
   held_atto: string;
   held_one: string;
+  net_atto: string;
+  net_one: string;
   issuable_atto: string;
   issuable_one: string;
   destination: Destination;
@@ -102,6 +139,8 @@ export interface VaultPosition {
   staked_one: string;
   not_issued_atto: string;
   not_issued_one: string;
+  redistributed_atto: string;
+  redistributed_one: string;
   held_atto: string;
   held_one: string;
   /** 1:1 with net principal (staked - not_issued) at vault seeding */
@@ -128,6 +167,22 @@ export interface Adjustment {
   evidence: string;
 }
 
+export interface ExchangeTreatment {
+  exchange_id: string;
+  display_name: string;
+  delivery_policy: string;
+  qualification_status: string;
+  planned_delivery_status: string;
+  destination: Destination;
+}
+
+export interface Disposition {
+  code: DispositionCode;
+  title: string;
+  detail: string;
+  destination: Destination;
+}
+
 export interface ClaimResponse {
   found: boolean;
   address: AddressForms;
@@ -139,6 +194,8 @@ export interface ClaimResponse {
   wallet_airdrop: WalletAirdrop | null;
   vault_positions: VaultPosition[];
   adjustments: Adjustment[];
+  exchange_treatments: ExchangeTreatment[];
+  disposition: Disposition | null;
   notes: string[];
   last_activity: {
     time_utc: string | null;
