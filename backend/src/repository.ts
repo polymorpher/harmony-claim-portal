@@ -4,6 +4,7 @@
  * implementation; tests provide an in-memory one.
  */
 import pg from "pg";
+import { assertPrivileges } from "./privileges.js";
 
 export interface AccountRow {
   secure_key: string;
@@ -16,6 +17,13 @@ export interface AccountRow {
   contract_identity: string | null;
   contract_treatment: string | null;
   policy_category: string | null;
+  stage_policy_applied: boolean;
+  migration_stage: string | null;
+  issuance_treatment: "issue" | "not_issued";
+  stage_reason: string | null;
+  migration_wallet_allocation_atto: string;
+  migration_staked_to_vault_atto: string;
+  migration_allocation_atto: string;
   liquid_shard0_atto: string;
   liquid_shard1_atto: string;
   active_staked_or_delegated_atto: string;
@@ -55,12 +63,21 @@ export interface VaultRow {
   governor_destination_id: string | null;
   governor_status: string;
   validator_name: string | null;
+  initial_assets_atto: string;
+  next_stage_assets_atto: string;
+  qualified_deferred_assets_atto: string;
+  manual_review_assets_atto: string;
+  uncompiled_deferred_assets_atto: string;
+  not_issued_assets_atto: string;
+  post_policy_assets_atto: string;
 }
 
 export interface ExceptionRow {
   component: "wallet_airdrop" | "vault_shares";
   source_address: string;
   source_category: string;
+  migration_stage: string | null;
+  issuance_treatment: "issue" | "not_issued" | "redistributed" | null;
   validator_address: string | null;
   amount_atto: string;
   exception_type: string;
@@ -79,6 +96,8 @@ export interface ExchangeRow {
   address: string;
   delivery_policy: string;
   qualification_status: string;
+  migration_stage: string | null;
+  issuance_treatment: string | null;
   planned_delivery_status: string;
   configured_destination: string | null;
   configured_destination_status: string;
@@ -124,6 +143,10 @@ export class PgRepository implements ClaimRepository {
     await this.pool.query("SELECT 1");
   }
 
+  async checkPrivileges(): Promise<void> {
+    await assertPrivileges(this.pool, "read");
+  }
+
   async getMeta(): Promise<SnapshotMeta> {
     const now = Date.now();
     if (this.metaCache && now - this.metaCache.at < 15_000) return this.metaCache.value;
@@ -140,7 +163,11 @@ export class PgRepository implements ClaimRepository {
     const res = await this.pool.query<AccountRow>(
       `SELECT secure_key, address, address_resolved, account_category, code_bearing,
               contract_primary_category, contract_subcategory, contract_identity,
-              contract_treatment, policy_category,
+              contract_treatment, policy_category, stage_policy_applied,
+              migration_stage, issuance_treatment, stage_reason,
+              migration_wallet_allocation_atto::text,
+              migration_staked_to_vault_atto::text,
+              migration_allocation_atto::text,
               liquid_shard0_atto::text, liquid_shard1_atto::text,
               active_staked_or_delegated_atto::text, pending_undelegation_atto::text,
               unclaimed_staking_reward_atto::text, pending_cross_shard_atto::text,
@@ -187,7 +214,8 @@ export class PgRepository implements ClaimRepository {
 
   async getExceptions(addressLower: string): Promise<ExceptionRow[]> {
     const res = await this.pool.query<ExceptionRow>(
-      `SELECT component, source_address, source_category, validator_address,
+      `SELECT component, source_address, source_category, migration_stage,
+              issuance_treatment, validator_address,
               amount_atto::text, exception_type, route_id, route_priority,
               destination_id, destination_address, destination_status, reason, evidence
          FROM routing_exceptions
@@ -206,7 +234,8 @@ export class PgRepository implements ClaimRepository {
   async getExchangeWallets(addressLower: string): Promise<ExchangeRow[]> {
     const res = await this.pool.query<ExchangeRow>(
       `SELECT exchange_id, display_name, address, delivery_policy,
-              qualification_status, planned_delivery_status,
+              qualification_status, migration_stage, issuance_treatment,
+              planned_delivery_status,
               configured_destination, configured_destination_status
          FROM exchange_wallets
         WHERE address = $1
@@ -225,7 +254,10 @@ export class PgRepository implements ClaimRepository {
     const res = await this.pool.query<VaultRow>(
       `SELECT validator_address, vault_assets_atto::text, priority_staked_to_vault_atto::text,
               deferred_staked_to_vault_atto::text, delegation_rows, governor_destination_id,
-              governor_status, validator_name
+              governor_status, validator_name, initial_assets_atto::text,
+              next_stage_assets_atto::text, qualified_deferred_assets_atto::text,
+              manual_review_assets_atto::text, uncompiled_deferred_assets_atto::text,
+              not_issued_assets_atto::text, post_policy_assets_atto::text
          FROM validator_vaults
         WHERE validator_address = ANY($1::text[])`,
       [validatorAddresses],

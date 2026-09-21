@@ -15,6 +15,8 @@ import {
   type Disposition,
   type ExchangeTreatment,
   type MetaResponse,
+  type MigrationPolicy,
+  type MigrationStage,
   type VaultPosition,
   type WalletAirdrop,
 } from "@hcp/shared";
@@ -41,6 +43,10 @@ export function amountPair(value: string | bigint): [string, string] {
 
 function asString(v: unknown): string | null {
   return typeof v === "string" ? v : null;
+}
+
+function sentenceCase(value: string): string {
+  return value.length === 0 ? value : value[0].toUpperCase() + value.slice(1);
 }
 
 function asNumber(v: unknown): number | null {
@@ -81,6 +87,7 @@ export function buildMeta(meta: SnapshotMeta): MetaResponse {
     loaded_at: asString(meta.loaded_at),
     fixture: meta.fixture === true,
     routing_status: asString(routing.status),
+    initial_stage_status: asString(routing.initial_stage_status),
     pending_policy_decisions: Array.isArray(pending)
       ? pending.filter((value): value is string => typeof value === "string")
       : [],
@@ -174,7 +181,26 @@ function walletBreakdown(account: AccountRow, exceptions: ExceptionRow[]): Walle
   const [redistributed_atto, redistributed_one] = amountPair(s.redistributed);
   const [held_atto, held_one] = amountPair(s.held);
   const [net_atto, net_one] = amountPair(net < 0n ? 0n : net);
-  const [issuable_atto, issuable_one] = amountPair(issuable < 0n ? 0n : issuable);
+  const destination = destinationFor(
+    s.gross,
+    s.notIssued,
+    s.redistributed,
+    s.held,
+    s.ready,
+    account.address ?? "",
+  );
+  const initialStage = account.stage_policy_applied
+    ? account.migration_stage === "initial"
+      ? toBigInt(account.migration_wallet_allocation_atto)
+      : 0n
+    : 0n;
+  const deliverable = destination.status === "ready"
+    ? initialStage
+    : 0n;
+  const [initial_stage_atto, initial_stage_one] = amountPair(initialStage);
+  const [issuable_atto, issuable_one] = amountPair(
+    deliverable < issuable ? deliverable : issuable,
+  );
   return {
     gross_atto,
     gross_one,
@@ -186,16 +212,11 @@ function walletBreakdown(account: AccountRow, exceptions: ExceptionRow[]): Walle
     held_one,
     net_atto,
     net_one,
+    initial_stage_atto,
+    initial_stage_one,
     issuable_atto,
     issuable_one,
-    destination: destinationFor(
-      s.gross,
-      s.notIssued,
-      s.redistributed,
-      s.held,
-      s.ready,
-      account.address ?? "",
-    ),
+    destination,
   };
 }
 
@@ -229,11 +250,25 @@ function vaultPositions(
     const [redistributed_atto, redistributed_one] = amountPair(s.redistributed);
     const [held_atto, held_one] = amountPair(s.held);
     const [expected_shares_atto, expected_shares_one] = amountPair(net < 0n ? 0n : net);
+    const initialShares = account.stage_policy_applied
+      ? account.migration_stage === "initial"
+        ? (net < 0n ? 0n : net)
+        : 0n
+      : 0n;
+    const [initial_stage_shares_atto, initial_stage_shares_one] = amountPair(initialShares);
     let vault: VaultPosition["vault"] = null;
     if (v) {
       const [assets_atto, assets_one] = amountPair(v.vault_assets_atto);
       const [priority_staked_atto, priority_staked_one] = amountPair(v.priority_staked_to_vault_atto);
       const [deferred_staked_atto, deferred_staked_one] = amountPair(v.deferred_staked_to_vault_atto);
+      const [initial_assets_atto, initial_assets_one] = amountPair(v.initial_assets_atto);
+      const [next_stage_assets_atto, next_stage_assets_one] = amountPair(v.next_stage_assets_atto);
+      const [qualified_deferred_assets_atto, qualified_deferred_assets_one] = amountPair(
+        v.qualified_deferred_assets_atto,
+      );
+      const [manual_review_assets_atto, manual_review_assets_one] = amountPair(v.manual_review_assets_atto);
+      const [not_issued_assets_atto, not_issued_assets_one] = amountPair(v.not_issued_assets_atto);
+      const [post_policy_assets_atto, post_policy_assets_one] = amountPair(v.post_policy_assets_atto);
       vault = {
         assets_atto,
         assets_one,
@@ -244,12 +279,25 @@ function vaultPositions(
         delegation_rows: Number(v.delegation_rows),
         governor_status: v.governor_status,
         governor_destination_id: v.governor_destination_id,
+        initial_assets_atto,
+        initial_assets_one,
+        next_stage_assets_atto,
+        next_stage_assets_one,
+        qualified_deferred_assets_atto,
+        qualified_deferred_assets_one,
+        manual_review_assets_atto,
+        manual_review_assets_one,
+        not_issued_assets_atto,
+        not_issued_assets_one,
+        post_policy_assets_atto,
+        post_policy_assets_one,
       };
     }
     return {
       validator: addressForms(validator),
       validator_name: v?.validator_name ?? null,
       is_self_delegation: d.is_self_delegation,
+      initial_stage: initialShares > 0n,
       priority: d.priority,
       staked_atto,
       staked_one,
@@ -261,6 +309,8 @@ function vaultPositions(
       held_one,
       expected_shares_atto,
       expected_shares_one,
+      initial_stage_shares_atto,
+      initial_stage_shares_one,
       status: destination.status,
       destination,
       vault,
@@ -335,6 +385,8 @@ function exchangeTreatments(rows: ExchangeRow[]): ExchangeTreatment[] {
       display_name: row.display_name,
       delivery_policy: row.delivery_policy,
       qualification_status: row.qualification_status,
+      migration_stage: row.migration_stage,
+      issuance_treatment: row.issuance_treatment,
       planned_delivery_status: row.planned_delivery_status,
       destination: {
         address: gateAutomatic
@@ -346,18 +398,96 @@ function exchangeTreatments(rows: ExchangeRow[]): ExchangeTreatment[] {
   });
 }
 
+function asMigrationStage(value: string | null): MigrationStage {
+  if (
+    value === "initial" ||
+    value === "next_stage" ||
+    value === "deferred" ||
+    value === "manual_review" ||
+    value === "below_threshold"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function reviewedContractIsNotIssued(account: AccountRow): boolean {
+  return (
+    account.account_category === "contract" &&
+    account.policy_category === "contract_review" &&
+    !["multisig_next_stage", "onewallet_recovery", "bridge_later_portal"].includes(
+      account.contract_treatment ?? "",
+    )
+  );
+}
+
+function migrationPolicyFor(account: AccountRow): MigrationPolicy {
+  const issuance = account.issuance_treatment === "not_issued" || reviewedContractIsNotIssued(account)
+    ? "not_issued"
+    : "issue";
+  const fallbackStage: MigrationStage = !account.meets_threshold
+    ? "below_threshold"
+    : null;
+  const stage = account.stage_policy_applied
+    ? asMigrationStage(account.migration_stage)
+    : issuance === "not_issued"
+      ? null
+      : fallbackStage;
+  const wallet = account.stage_policy_applied
+    ? toBigInt(account.migration_wallet_allocation_atto)
+    : 0n;
+  const staked = account.stage_policy_applied
+    ? toBigInt(account.migration_staked_to_vault_atto)
+    : 0n;
+  const total = account.stage_policy_applied
+    ? toBigInt(account.migration_allocation_atto)
+    : wallet + staked;
+  const [wallet_allocation_atto, wallet_allocation_one] = amountPair(wallet);
+  const [staked_to_vault_atto, staked_to_vault_one] = amountPair(staked);
+  const [total_allocation_atto, total_allocation_one] = amountPair(total);
+  return {
+    stage_policy_applied: account.stage_policy_applied,
+    snapshot_qualified: account.meets_threshold,
+    stage,
+    issuance_treatment: issuance,
+    stage_reason: account.stage_reason,
+    wallet_allocation_atto,
+    wallet_allocation_one,
+    staked_to_vault_atto,
+    staked_to_vault_one,
+    total_allocation_atto,
+    total_allocation_one,
+  };
+}
+
+function redactMigrationAmounts(policy: MigrationPolicy): MigrationPolicy {
+  return {
+    ...policy,
+    wallet_allocation_atto: null,
+    wallet_allocation_one: null,
+    staked_to_vault_atto: null,
+    staked_to_vault_one: null,
+    total_allocation_atto: null,
+    total_allocation_one: null,
+  };
+}
+
 function dispositionFor(
   account: AccountRow | null,
   exchanges: ExchangeTreatment[],
+  migration: MigrationPolicy | null,
   netTotal: bigint | null,
   notIssuedTotal: bigint | null,
   walletDestination: Destination | null,
 ): Disposition | null {
-  if (netTotal === 0n && notIssuedTotal !== null && notIssuedTotal > 0n) {
+  if (
+    migration?.issuance_treatment === "not_issued" ||
+    (netTotal === 0n && notIssuedTotal !== null && notIssuedTotal > 0n)
+  ) {
     return {
       code: "not_issuing",
-      title: "Not part of the prioritized airdrop",
-      detail: "The post-deduction entitlement is zero. The deducted amount is retained in the Year 2025 Supply Reserve.",
+      title: "Not issued",
+      detail: "The migration allocation is not issued and is retained in the 2050 premint reserve.",
       destination: { address: null, status: "not_issuing" },
     };
   }
@@ -372,33 +502,31 @@ function dispositionFor(
     };
   }
 
-  const nonGate = exchanges.find((row) => row.exchange_id !== "gate");
-  if (nonGate) {
-    const routed = nonGate.destination.status === "ready" && nonGate.destination.address;
+  if (account?.meets_threshold && !migration?.stage_policy_applied) {
     return {
-      code: "handled_by_exchange",
-      title: `Handled by ${nonGate.display_name}`,
-      detail: routed
-        ? `This exchange-controlled wallet will not receive a direct airdrop. Its entitlement is routed to the ${nonGate.display_name} aggregate address.`
-        : `This exchange-controlled wallet will not receive a direct airdrop. Its ${nonGate.display_name} aggregate destination is pending approval.`,
-      destination: nonGate.destination,
+      code: "hold",
+      title: "Migration stage unavailable",
+      detail: "Snapshot qualification is recorded, but the reviewed migration-stage policy has not been loaded. No initial-stage delivery is authorized.",
+      destination: { address: null, status: "hold" },
     };
   }
 
   const gate = exchanges.find((row) => row.exchange_id === "gate");
   if (gate) {
-    if (gate.planned_delivery_status === "automatic_same_address") {
+    if (gate.migration_stage === "initial" && migration?.stage === "initial") {
       return {
         code: "automatic_same_address",
-        title: "Prioritized airdrop applies",
-        detail: "This Gate-controlled wallet qualifies for the current same-address airdrop.",
+        title: "Initial-stage airdrop applies",
+        detail: "This Gate-controlled wallet is included in the current initial-stage same-address airdrop.",
         destination: gate.destination,
       };
     }
     return {
-      code: "gate_aggregate_pending",
-      title: "Not in the prioritized airdrop",
-      detail: "This Gate-controlled wallet will be routed to a Gate aggregate address in a later stage; that address is still to be determined.",
+      code: "gate_deferred",
+      title: "Gate wallet deferred",
+      detail: migration?.stage_reason
+        ? `${sentenceCase(migration.stage_reason)}. Gate requested no aggregate reroute.`
+        : "This wallet is not in the initial stage. Gate requested no aggregate reroute.",
       destination: { address: null, status: "hold" },
     };
   }
@@ -427,12 +555,65 @@ function dispositionFor(
       destination: { address: null, status: "hold" },
     };
   }
+  if (
+    account?.account_category === "contract" &&
+    (migration?.stage === "deferred" || migration?.stage === "below_threshold")
+  ) {
+    return {
+      code: "deferred",
+      title: "Deferred",
+      detail: migration.stage_reason ||
+        "This unreviewed code-bearing account is outside the current migration stage.",
+      destination: { address: null, status: "hold" },
+    };
+  }
+  if (
+    migration?.stage === "deferred" ||
+    migration?.stage === "manual_review" ||
+    migration?.stage === "below_threshold"
+  ) {
+    return {
+      code: "deferred",
+      title: migration.stage === "manual_review" ? "Manual review stage" : "Deferred",
+      detail: migration.stage_reason ? sentenceCase(migration.stage_reason) :
+        (migration.stage === "below_threshold"
+          ? "This account is below the snapshot qualification threshold."
+          : "This eligible wallet is outside the current six-month activity stage."),
+      destination: walletDestination ?? { address: null, status: "hold" },
+    };
+  }
+
+  const nonGate = exchanges.find((row) => row.exchange_id !== "gate");
+  if (nonGate) {
+    const routed = nonGate.destination.status === "ready" && nonGate.destination.address;
+    return {
+      code: "handled_by_exchange",
+      title: `Initial stage — handled by ${nonGate.display_name}`,
+      detail: routed
+        ? `This exchange-controlled wallet is in the initial stage. Its entitlement is routed to the ${nonGate.display_name} aggregate address rather than the source wallet.`
+        : `This exchange-controlled wallet is in the initial stage, but its ${nonGate.display_name} aggregate destination is pending approval.`,
+      destination: nonGate.destination,
+    };
+  }
+
   if (account?.account_category === "contract") {
     return {
       code: "contract_recovery",
       title: "Smart contract recovery",
       detail: "This contract is handled through a class-specific recovery process rather than a same-address airdrop.",
       destination: walletDestination ?? { address: null, status: "hold" },
+    };
+  }
+  if (migration?.stage === "initial") {
+    const routingReady =
+      walletDestination?.status === "ready" || walletDestination?.status === "none";
+    return {
+      code: routingReady ? "automatic_same_address" : "hold",
+      title: routingReady ? "Initial stage" : "Initial stage — routing on hold",
+      detail: routingReady
+        ? "This eligible wallet is included in the current six-month activity stage."
+        : "This eligible wallet is in the current six-month activity stage, but its delivery destination is not yet ready.",
+      destination: walletDestination ?? { address: account?.address ?? null, status: "ready" },
     };
   }
   if (walletDestination?.status === "hold") {
@@ -443,19 +624,11 @@ function dispositionFor(
       destination: walletDestination,
     };
   }
-  if (account?.meets_threshold) {
-    return {
-      code: "automatic_same_address",
-      title: "Prioritized",
-      detail: "This account qualifies for the current prioritized distribution.",
-      destination: walletDestination ?? { address: account.address, status: "ready" },
-    };
-  }
   if (account) {
     return {
       code: "deferred",
       title: "Deferred",
-      detail: "This account is not part of the current prioritized distribution.",
+      detail: "This account has no authorized initial-stage allocation.",
       destination: walletDestination ?? { address: null, status: "hold" },
     };
   }
@@ -494,7 +667,8 @@ export function buildClaimResponse(
     vault_positions: [],
     adjustments: [],
     exchange_treatments: exchanges,
-    disposition: dispositionFor(null, exchanges, null, null, null),
+    disposition: dispositionFor(null, exchanges, null, null, null, null),
+    migration_policy: null,
     notes: [],
     last_activity: null,
     meta,
@@ -512,11 +686,23 @@ export function buildClaimResponse(
   const isContract = account.account_category === "contract";
   const hideAmounts = isContract && !options.exposeContractAmounts;
   const category = account.contract_primary_category;
-  const contractDisposition = dispositionFor(account, exchanges, null, null, null);
+  const contractMigration = migrationPolicyFor(account);
+  const contractDisposition = dispositionFor(
+    account,
+    exchanges,
+    contractMigration,
+    null,
+    null,
+    null,
+  );
 
   if (isContract) {
     notes.push(
-      `This address is a smart contract${category ? ` (${category})` : ""}. Contract balances are not delivered to the same address automatically; they are handled in a later phase through a class-specific recovery process.`,
+      contractMigration.issuance_treatment === "not_issued"
+        ? `This address is a reviewed smart contract${category ? ` (${category})` : ""}. Its migration allocation is not issued and is retained in the 2050 premint reserve.`
+        : contractMigration.stage === "deferred" || contractMigration.stage === "below_threshold"
+          ? `This code-bearing address${category ? ` (${category})` : ""} is deferred. No same-address contract delivery or later-stage recovery is authorized by this classification alone.`
+          : `This address is a smart contract${category ? ` (${category})` : ""}. Contract balances are not delivered to the same address automatically; they are handled in a later phase through a class-specific recovery process.`,
     );
   }
   if (hideAmounts) {
@@ -527,6 +713,7 @@ export function buildClaimResponse(
       contract_category: category,
       code_bearing: account.code_bearing,
       disposition: contractDisposition,
+      migration_policy: redactMigrationAmounts(contractMigration),
       notes,
     };
   }
@@ -538,7 +725,9 @@ export function buildClaimResponse(
   const gateAggregatePending = exchanges.some(
     (row) =>
       row.exchange_id === "gate" &&
-      row.planned_delivery_status !== "automatic_same_address",
+      (account.stage_policy_applied
+        ? row.migration_stage !== "initial"
+        : row.planned_delivery_status !== "automatic_same_address"),
   );
   if (gateAggregatePending) {
     wallet = {
@@ -574,6 +763,13 @@ export function buildClaimResponse(
       destination_id: ex.destination_id,
       destination_address: ex.destination_address ? ex.destination_address.toLowerCase() : null,
       destination_status: ex.destination_status,
+      migration_stage: asMigrationStage(ex.migration_stage),
+      issuance_treatment: ex.issuance_treatment ??
+        (ex.destination_status === "not_issuing"
+          ? "not_issued"
+          : ex.destination_status === "redistributed"
+            ? "redistributed"
+            : "issue"),
       evidence: ex.evidence,
     };
   });
@@ -586,10 +782,48 @@ export function buildClaimResponse(
     positions.reduce((acc, p) => acc + toBigInt(p.redistributed_atto), 0n);
   const netTotalRaw = grossTotal - notIssuedTotal - redistributedTotal;
   const netTotal = netTotalRaw < 0n ? 0n : netTotalRaw;
-  const meetsThreshold = account.meets_threshold && netTotal > 0n;
+  const netStaked = positions.reduce((acc, position) => acc + toBigInt(position.expected_shares_atto), 0n);
+  let migration = migrationPolicyFor(account);
+  if (!account.stage_policy_applied) {
+    const compiledStage = exceptions
+      .map((exception) => asMigrationStage(exception.migration_stage))
+      .find((stage) => stage !== null);
+    if (compiledStage) {
+      migration = { ...migration, stage: compiledStage };
+      if (compiledStage === "manual_review" && netTotal > 0n) {
+        const [wallet_allocation_atto, wallet_allocation_one] = amountPair(wallet.net_atto);
+        const [staked_to_vault_atto, staked_to_vault_one] = amountPair(netStaked);
+        const [total_allocation_atto, total_allocation_one] = amountPair(netTotal);
+        migration = {
+          ...migration,
+          wallet_allocation_atto,
+          wallet_allocation_one,
+          staked_to_vault_atto,
+          staked_to_vault_one,
+          total_allocation_atto,
+          total_allocation_one,
+        };
+      }
+    }
+    if (netTotal === 0n && notIssuedTotal > 0n) {
+      migration = {
+        ...migration,
+        stage: null,
+        issuance_treatment: "not_issued",
+        wallet_allocation_atto: "0",
+        wallet_allocation_one: "0",
+        staked_to_vault_atto: "0",
+        staked_to_vault_one: "0",
+        total_allocation_atto: "0",
+        total_allocation_one: "0",
+      };
+    }
+  }
+  const meetsThreshold = account.meets_threshold;
   const disposition = dispositionFor(
     account,
     exchanges,
+    migration,
     netTotal,
     notIssuedTotal,
     wallet.destination,
@@ -600,6 +834,11 @@ export function buildClaimResponse(
       `The qualification total (${formatOne(qualificationTotal)} ONE) is below the ${formatOne(meta.threshold_atto, 0)} ONE threshold, so this account is deferred and not part of the prioritized distribution.`,
     );
   }
+  if (account.meets_threshold && migration.stage === "deferred") {
+    notes.push(
+      `${migration.stage_reason ? sentenceCase(migration.stage_reason) : "This eligible wallet is outside the current six-month activity window."} Snapshot qualification is unchanged; the allocation is deferred to a later stage.`,
+    );
+  }
   if (account.account_category === "validator_account") {
     notes.push(
       "Verified validator account: the code field holds validator data, but the account is key-controlled. Wallet tokens and vault shares are delivered to the same address.",
@@ -607,7 +846,7 @@ export function buildClaimResponse(
   }
   if (notIssuedTotal > 0n) {
     notes.push(
-      `${formatOne(notIssuedTotal)} ONE is not issued under the published policy and is retained in the Year 2025 Supply Reserve; see the adjustments for the reason.`,
+      `${formatOne(notIssuedTotal)} ONE is not issued under the published policy and is retained in the 2050 premint reserve; see the adjustments for the reason.`,
     );
   }
   if (redistributedTotal > 0n) {
@@ -653,11 +892,14 @@ export function buildClaimResponse(
       qualification_total_atto,
       qualification_total_one,
       meets_threshold: meetsThreshold,
-      status: netTotal === 0n && notIssuedTotal > 0n
+      status: migration.issuance_treatment === "not_issued" ||
+          (netTotal === 0n && notIssuedTotal > 0n)
         ? "not_issuing"
         : disposition?.code === "handled_by_exchange"
           ? "handled_by_exchange"
-        : meetsThreshold
+        : migration.stage === "next_stage"
+          ? "next_stage"
+        : migration.stage === "initial"
           ? "prioritized"
           : "deferred",
     },
@@ -666,6 +908,7 @@ export function buildClaimResponse(
     vault_positions: positions,
     adjustments,
     disposition,
+    migration_policy: migration,
     notes,
     last_activity: account.last_activity_time_utc
       ? {
