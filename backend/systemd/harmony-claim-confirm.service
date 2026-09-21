@@ -1,21 +1,20 @@
 [Unit]
-Description=Harmony claim portal lookup API (read-only database role)
+Description=Harmony claim portal confirmation API
 After=network-online.target postgresql.service
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=claimapi
-Group=claimapi
+User=claimconfirm
+Group=claimconfirm
 WorkingDirectory=/opt/harmony-claim-api/current
-EnvironmentFile=/etc/harmony-claim-api.env
+EnvironmentFile=/etc/harmony-claim-confirm.env
 Environment=NODE_ENV=production
-ExecStart=/usr/bin/node /opt/harmony-claim-api/current/dist/server.js
+ExecStart=/usr/bin/node /opt/harmony-claim-api/current/dist/confirm-server.js
 Restart=always
 RestartSec=3
 LimitNOFILE=65536
 
-# hardening
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

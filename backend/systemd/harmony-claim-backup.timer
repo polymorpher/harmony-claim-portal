@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily backup of Harmony confirmation evidence
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target

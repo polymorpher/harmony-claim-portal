@@ -1,0 +1,31 @@
+[Unit]
+Description=Harmony claim portal API proxy
+After=network-online.target harmony-claim-api.service harmony-claim-confirm.service
+Wants=harmony-claim-api.service harmony-claim-confirm.service
+
+[Service]
+Type=simple
+User=claimproxy
+Group=claimproxy
+WorkingDirectory=/opt/harmony-claim-api/current
+Environment=NODE_ENV=production
+Environment=HOST=0.0.0.0
+Environment=PORT=8080
+Environment=CLAIM_UPSTREAM=http://127.0.0.1:8081
+Environment=CONFIRM_UPSTREAM=http://127.0.0.1:8082
+ExecStart=/usr/bin/node /opt/harmony-claim-api/current/dist/proxy.js
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/harmony-claim-api
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
