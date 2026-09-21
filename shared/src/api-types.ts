@@ -4,7 +4,9 @@
  */
 
 export type AccountType = "ordinary_eoa" | "validator_account" | "contract" | "excluded";
-export type EligibilityStatus = "prioritized" | "deferred" | "not_issuing" | "handled_by_exchange";
+export type EligibilityStatus = "prioritized" | "deferred" | "next_stage" | "not_issuing" | "handled_by_exchange";
+export type MigrationStage = "initial" | "next_stage" | "deferred" | "manual_review" | "below_threshold" | null;
+export type IssuanceTreatment = "issue" | "not_issued";
 export type DestinationStatus = "ready" | "hold" | "not_issuing" | "redistributed" | "none";
 export type AdjustmentKind = "deduction" | "redistribution" | "hold" | "redirect" | "same_address";
 export type Component = "wallet_airdrop" | "vault_shares";
@@ -14,7 +16,7 @@ export type DispositionCode =
   | "not_issuing"
   | "handled_by_exchange"
   | "exchange_no_claim"
-  | "gate_aggregate_pending"
+  | "gate_deferred"
   | "multisig_next_stage"
   | "onewallet_recovery"
   | "bridge_later_portal"
@@ -49,6 +51,7 @@ export interface MetaResponse {
   loaded_at: string | null;
   fixture: boolean;
   routing_status: string | null;
+  initial_stage_status: string | null;
   pending_policy_decisions: string[];
 }
 
@@ -113,6 +116,8 @@ export interface WalletAirdrop {
   held_one: string;
   net_atto: string;
   net_one: string;
+  initial_stage_atto: string;
+  initial_stage_one: string;
   issuable_atto: string;
   issuable_one: string;
   destination: Destination;
@@ -128,12 +133,25 @@ export interface VaultTotals {
   delegation_rows: number;
   governor_status: string;
   governor_destination_id: string | null;
+  initial_assets_atto: string;
+  initial_assets_one: string;
+  next_stage_assets_atto: string;
+  next_stage_assets_one: string;
+  qualified_deferred_assets_atto: string;
+  qualified_deferred_assets_one: string;
+  manual_review_assets_atto: string;
+  manual_review_assets_one: string;
+  not_issued_assets_atto: string;
+  not_issued_assets_one: string;
+  post_policy_assets_atto: string;
+  post_policy_assets_one: string;
 }
 
 export interface VaultPosition {
   validator: AddressForms;
   validator_name: string | null;
   is_self_delegation: boolean;
+  initial_stage: boolean;
   priority: boolean;
   staked_atto: string;
   staked_one: string;
@@ -146,6 +164,8 @@ export interface VaultPosition {
   /** 1:1 with net principal (staked - not_issued) at vault seeding */
   expected_shares_atto: string;
   expected_shares_one: string;
+  initial_stage_shares_atto: string;
+  initial_stage_shares_one: string;
   status: DestinationStatus;
   destination: Destination;
   vault: VaultTotals | null;
@@ -164,6 +184,8 @@ export interface Adjustment {
   destination_id: string | null;
   destination_address: string | null;
   destination_status: DestinationStatus;
+  migration_stage: MigrationStage;
+  issuance_treatment: "issue" | "not_issued" | "redistributed";
   evidence: string;
 }
 
@@ -172,6 +194,8 @@ export interface ExchangeTreatment {
   display_name: string;
   delivery_policy: string;
   qualification_status: string;
+  migration_stage: string | null;
+  issuance_treatment: string | null;
   planned_delivery_status: string;
   destination: Destination;
 }
@@ -181,6 +205,20 @@ export interface Disposition {
   title: string;
   detail: string;
   destination: Destination;
+}
+
+export interface MigrationPolicy {
+  stage_policy_applied: boolean;
+  snapshot_qualified: boolean;
+  stage: MigrationStage;
+  issuance_treatment: IssuanceTreatment;
+  stage_reason: string | null;
+  wallet_allocation_atto: string | null;
+  wallet_allocation_one: string | null;
+  staked_to_vault_atto: string | null;
+  staked_to_vault_one: string | null;
+  total_allocation_atto: string | null;
+  total_allocation_one: string | null;
 }
 
 export interface ClaimResponse {
@@ -196,6 +234,7 @@ export interface ClaimResponse {
   adjustments: Adjustment[];
   exchange_treatments: ExchangeTreatment[];
   disposition: Disposition | null;
+  migration_policy: MigrationPolicy | null;
   notes: string[];
   last_activity: {
     time_utc: string | null;
@@ -211,4 +250,37 @@ export interface ApiError {
   error: string;
   message: string;
   statusCode: number;
+}
+
+export interface ConfirmationStatus {
+  address: AddressForms;
+  eligible: boolean;
+  /** Set only when this address is in the current candidate set. */
+  stage_reason: string | null;
+  data_version: string | null;
+  policy_version: string | null;
+  confirmation: {
+    recorded_at: string;
+    data_version: string;
+    policy_version: string;
+  } | null;
+}
+
+export interface ConfirmationChallenge {
+  address: AddressForms;
+  message: string;
+  nonce: string;
+  /** Canonical timestamp embedded in `message`. Send it back unchanged. */
+  issued_at: string;
+  expires_at: string;
+  data_version: string;
+  policy_version: string;
+}
+
+export interface ConfirmationReceipt {
+  address: AddressForms;
+  data_version: string;
+  policy_version: string;
+  recorded_at: string;
+  status: "recorded";
 }
