@@ -19,6 +19,14 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; word-break: break-all; }
 
 .page { max-width: 880px; margin: 0 auto; padding: 32px 20px 64px; }
+.nav { display: flex; gap: 16px; margin: 0 0 18px; }
+.nav a { color: var(--accent); font-weight: 600; text-decoration: none; }
+.nav a[aria-current="page"] { color: var(--text); }
+.message {
+  white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem; background: #0c1117; border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px 14px;
+}
 .header h1 { margin: 0 0 6px; font-size: 1.7rem; }
 .sub { margin: 0 0 24px; color: var(--muted); }
 

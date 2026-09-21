@@ -1,4 +1,4 @@
-import type { Adjustment, ClaimResponse, VaultPosition } from "@hcp/shared";
+import { claimCanRequestConfirmation, type Adjustment, type ClaimResponse, type VaultPosition } from "@hcp/shared";
 import { formatUtc, one, shortAddress } from "./format";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -43,7 +43,7 @@ function Banner({ claim }: { claim: ClaimResponse }) {
   }
   return (
     <div className="banner ok">
-      <strong>Prioritized.</strong> Post-deduction claim {one(e.total_claim_atto)} ONE.
+      <strong>Initial stage.</strong> Migration allocation {one(e.total_claim_atto)} ONE.
     </div>
   );
 }
@@ -129,11 +129,15 @@ function Wallet({ claim }: { claim: ClaimResponse }) {
             <td className="num">{one(w.net_atto)}</td>
           </tr>
           <tr className="total">
-            <td>Deliverable now</td>
+            <td>Initial-stage wallet allocation</td>
+            <td className="num">{one(w.initial_stage_atto)}</td>
+          </tr>
+          <tr className="total">
+            <td>Deliverable in the initial stage</td>
             <td className="num">{one(w.issuable_atto)}</td>
           </tr>
           <tr>
-            <td>Destination</td>
+            <td>Routing destination</td>
             <td className="num">
               {w.destination.address ? (
                 <code title={w.destination.address}>{shortAddress(w.destination.address)}</code>
@@ -159,9 +163,13 @@ function Exchanges({ claim }: { claim: ClaimResponse }) {
           <dd>{row.display_name}</dd>
           <dt>Current treatment</dt>
           <dd>{row.planned_delivery_status.replace(/_/g, " ")}</dd>
-          <dt>Aggregate destination</dt>
+          <dt>Migration stage</dt>
+          <dd>{(row.migration_stage ?? "not assigned").replace(/_/g, " ")}</dd>
+          <dt>{row.exchange_id === "gate" ? "Delivery policy" : "Aggregate destination"}</dt>
           <dd>
-            {row.destination.address ? (
+            {row.exchange_id === "gate" && row.migration_stage !== "initial" ? (
+              "Deferred; Gate requested no aggregate reroute"
+            ) : row.destination.address ? (
               <code>{row.destination.address}</code>
             ) : row.destination.status === "none" ? (
               "Not applicable — no cutoff claim"
@@ -191,6 +199,7 @@ function Vaults({ positions }: { positions: VaultPosition[] }) {
             <th className="num">Not issued</th>
             <th className="num">On hold</th>
             <th className="num">Expected shares</th>
+            <th className="num">Initial-stage shares</th>
             <th>Status</th>
           </tr>
         </thead>
@@ -209,14 +218,42 @@ function Vaults({ positions }: { positions: VaultPosition[] }) {
               <td className="num">{one(p.not_issued_atto)}</td>
               <td className="num">{one(p.held_atto)}</td>
               <td className="num">{one(p.expected_shares_atto)}</td>
+              <td className="num">{one(p.initial_stage_shares_atto)}</td>
               <td>
                 {STATUS_LABEL[p.status]}
-                {!p.priority ? <div className="small">deferred</div> : null}
+                {!p.initial_stage ? <div className="small">not in initial stage</div> : null}
               </td>
             </tr>
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function Migration({ claim }: { claim: ClaimResponse }) {
+  const policy = claim.migration_policy;
+  if (!policy) return null;
+  const stage = policy.issuance_treatment === "not_issued"
+    ? "not issued"
+    : (policy.stage ?? "not assigned").replace(/_/g, " ");
+  return (
+    <div className="block">
+      <h3>Migration policy</h3>
+      <dl className="addr">
+        <dt>Snapshot threshold</dt>
+        <dd>{policy.snapshot_qualified ? "Qualified" : "Below threshold"}</dd>
+        <dt>Migration stage</dt>
+        <dd>{stage}</dd>
+        <dt>Issuance treatment</dt>
+        <dd>{policy.issuance_treatment.replace(/_/g, " ")}</dd>
+        {policy.stage_reason && (
+          <>
+            <dt>Stage reason</dt>
+            <dd>{policy.stage_reason}</dd>
+          </>
+        )}
+      </dl>
     </div>
   );
 }
@@ -250,9 +287,6 @@ function Adjustments({ adjustments }: { adjustments: Adjustment[] }) {
 }
 
 export function ClaimView({ claim }: { claim: ClaimResponse }) {
-  const netVaultAtto = claim.vault_positions
-    .reduce((total, position) => total + BigInt(position.expected_shares_atto), 0n)
-    .toString();
   return (
     <div className="claim">
       <Banner claim={claim} />
@@ -260,23 +294,29 @@ export function ClaimView({ claim }: { claim: ClaimResponse }) {
       {claim.found && claim.eligibility && (
         <div className="summary">
           <div>
-            <span className="label">Post-deduction total claim</span>
-            <span className="big">{one(claim.eligibility.total_claim_atto)} ONE</span>
+            <span className="label">Total migration allocation</span>
+            <span className="big">{one(claim.migration_policy?.total_allocation_atto ?? claim.eligibility.total_claim_atto)} ONE</span>
           </div>
           <div>
-            <span className="label">Post-deduction wallet entitlement</span>
-            <span className="big">{one(claim.wallet_airdrop?.net_atto)} ONE</span>
+            <span className="label">Initial-stage wallet allocation</span>
+            <span className="big">{one(claim.wallet_airdrop?.initial_stage_atto)} ONE</span>
           </div>
           <div>
-            <span className="label">Post-deduction vault shares</span>
-            <span className="big">{one(netVaultAtto)} ONE</span>
+            <span className="label">Initial-stage vault shares</span>
+            <span className="big">{one(claim.migration_policy?.stage === "initial" ? claim.migration_policy.staked_to_vault_atto : "0")} ONE</span>
           </div>
         </div>
       )}
+      <Migration claim={claim} />
       <Wallet claim={claim} />
       <Vaults positions={claim.vault_positions} />
       <Exchanges claim={claim} />
       <Adjustments adjustments={claim.adjustments} />
+      {claimCanRequestConfirmation(claim) && (
+        <p>
+          <a href="/confirm">Confirm ownership for the next batch</a>
+        </p>
+      )}
       {claim.notes.length > 0 && (
         <div className="block">
           <h3>Notes</h3>
@@ -292,7 +332,7 @@ export function ClaimView({ claim }: { claim: ClaimResponse }) {
           Last activity before cutoff: {formatUtc(claim.last_activity.time_utc)}
           {claim.last_activity.block ? `, block ${claim.last_activity.block.toLocaleString()}` : ""}
           {claim.last_activity.shard !== null ? ` on shard ${claim.last_activity.shard}` : ""}
-          . This is contextual indexed activity, not proof of current control or eligibility.
+          . This contextual indexed activity selects the initial wallet stage; it is not proof of current control or abandonment and does not change snapshot qualification.
         </p>
       )}
     </div>
