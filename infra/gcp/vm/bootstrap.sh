@@ -96,6 +96,10 @@ mkdir -p "$APP_DIR/releases" "$APP_DIR/home"
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 
 echo "== runtime environment file"
+# The first boot writes the owner URL here so the first deploy can migrate.
+# db/ops/setup-roles.sh, run by backend/deploy/deploy-backend.sh, moves that
+# URL to /etc/harmony-claim-migrate.env (root-only) and leaves the API process
+# with the read-only role. Do not put the owner URL back into this file.
 umask 077
 cat >"$APP_ENV_FILE" <<EOF
 DATABASE_URL=postgres://${DB_USER}:${db_password}@127.0.0.1:5432/${DB_NAME}

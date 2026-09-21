@@ -5,7 +5,8 @@
 #   backend/deploy/tunnel-db.sh
 #   PGPASSWORD=... python3 injector/inject_claims.py --dsn postgres://claimapi@localhost:5433/claims ...
 #
-# The claimapi password lives in /etc/harmony-claim-api.env on the VM:
+# The owner password lives in /etc/harmony-claim-migrate.env on the VM
+# (root-only). Lookup and confirm processes do not have it.
 #   backend/deploy/tunnel-db.sh --print-dsn
 set -euo pipefail
 
@@ -18,7 +19,7 @@ require_vars GCP_PROJECT GCP_ZONE VM_NAME DB_TUNNEL_PORT DB_NAME
 require_tools gcloud
 
 if [ "${1:-}" = "--print-dsn" ]; then
-  url="$(vm_ssh "sudo grep -E '^DATABASE_URL=' $APP_ENV_FILE | cut -d= -f2- | tr -d '\"'")"
+  url="$(vm_ssh "if [ -f /etc/harmony-claim-migrate.env ]; then sudo grep -E '^DATABASE_URL=' /etc/harmony-claim-migrate.env; else sudo grep -E '^DATABASE_URL=' $APP_ENV_FILE; fi | cut -d= -f2- | tr -d '\"'")"
   # rewrite host/port for the tunnel
   echo "$url" | sed -E "s#@[^/]+/#@localhost:${DB_TUNNEL_PORT}/#"
   exit 0

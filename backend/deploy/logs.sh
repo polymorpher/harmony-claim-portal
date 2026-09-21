@@ -14,4 +14,4 @@ require_tools gcloud
 args="-n 100"
 if [ "$#" -gt 0 ]; then args="$*"; fi
 exec gcloud --project "$GCP_PROJECT" --quiet compute ssh "$VM_NAME" --zone "$GCP_ZONE" --tunnel-through-iap \
-  --command "sudo journalctl -u $SERVICE_NAME -f --no-pager $args"
+  --command "sudo journalctl -u $SERVICE_NAME -u harmony-claim-confirm -u harmony-claim-proxy -f --no-pager $args"

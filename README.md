@@ -17,9 +17,11 @@ infra/gcp/20-setup-frontend-bucket.sh   public GCS bucket with SPA fallback
 infra/gcp/30-setup-load-balancer.sh     global HTTPS LB, /api/* -> VM, Certificate Manager cert, 80 -> 443
 infra/cloudflare/{lib,setup-dns}.sh     proxied A records, _acme-challenge CNAMEs, strict SSL, HTTPS-only
 db/migrations/001_schema.sql   schema (amounts NUMERIC(78,0) in atto-ONE)
+db/migrations/005_confirm_schema.sql   confirmation candidates and append-only signatures
+db/ops/                        role split, candidate load, export, review, backup (see db/ops/README.md)
 db/seed/reason_texts.json      reason_code -> user-facing title/text (+ apply-reason-texts.sh)
 injector/                      Python loader: harmony-migration CSVs -> Postgres (COPY + atomic swap)
-backend/                       Fastify + TypeScript API, systemd unit, deploy/tunnel/logs scripts
+backend/                       lookup API, confirmation API, and the proxy in front of them
 frontend/                      Vite + React + wagmi/viem UI, deploy script
 shared/                        @hcp/shared: API types, BigInt atto formatting, one1 bech32
 scripts/dev-postgres.sh        user-owned local PostgreSQL 18 for development
@@ -33,16 +35,38 @@ Single-address lookups only; there are no list, search or aggregate endpoints.
 - `GET /api/v1/meta` - cutoff blocks/time, threshold, data version, loaded_at
 - `GET /api/v1/claims/:address` - `0x...` (any case, EIP-55 validated when
   mixed case) or `one1...`; returns the address in hex/checksum/bech32 forms,
-  `account_type`, post-deduction `eligibility`, native/WONE `components`,
+  `account_type`, snapshot `eligibility`, separate `migration_policy`,
+  native/WONE `components`,
   `wallet_airdrop` (gross, not_issued, redistributed, held, net, deliverable,
   destination), `vault_positions[]`, `exchange_treatments[]`, a user-facing
-  `disposition`, `adjustments[]`, and `notes[]`. Smart-contract amounts remain
-  hidden unless `EXPOSE_CONTRACT_AMOUNTS=true`, while their reviewed next-stage
+  `disposition`, `adjustments[]`, and `notes[]`. The migration policy separates
+  the six-month initial stage, later stages, and terminal non-issuance from
+  destination readiness. Smart-contract amounts remain hidden unless
+  `EXPOSE_CONTRACT_AMOUNTS=true`, while reviewed next-stage or not-issued
   treatment is still shown.
 
-Rate limit: 30 requests/minute per client (`CF-Connecting-IP`, then first
-`X-Forwarded-For`, then socket IP); 429 with `Retry-After`. Helmet headers,
-`Cache-Control: no-store`.
+Rate limit: 30 requests/minute per browser (client IP plus User-Agent) and
+300/minute per IP. The client IP is `CF-Connecting-IP`, then the first
+`X-Forwarded-For` hop, then the socket. The looked-up address is not part of
+the limit. 429 includes `Retry-After`. Helmet headers, `Cache-Control: no-store`.
+The confirmation process uses the same rule with its own lower per-browser cap.
+
+`/confirm` is the only page that asks for a signature. It is for key-controlled
+wallets deferred because their last indexed activity is outside the six-month
+window, or because no activity was indexed. The signature is `personal_sign`.
+It records current control for a later batch. It does not change the cutoff
+ledger, and a stored row is not itself authorization: the export has to be
+recovered and checked before a wallet is promoted.
+
+Confirmation routes:
+
+- `GET /api/v1/confirmations/:address` - eligibility and whether a signature is already stored
+- `POST /api/v1/confirmations/challenges` - a random nonce and the exact message to sign; nothing is stored
+- `POST /api/v1/confirmations` - the signature, nonce, and issued time. The server rebuilds the message and checks it is still inside the time window
+
+The lookup process uses the `claim_read` role. The confirmation process uses
+`claim_confirm` and cannot write the claim tables. The owner role used by
+migrations and the injector is not in either process. See `db/ops/README.md`.
 
 ## Development
 
@@ -52,7 +76,9 @@ pnpm --filter @hcp/shared build
 
 scripts/dev-postgres.sh start                      # PostgreSQL 18 on port 5434
 scripts/dev-postgres.sh createdb claims
-psql "$(scripts/dev-postgres.sh url claims)" -f db/migrations/001_schema.sql
+for f in db/migrations/*.sql; do
+  psql "$(scripts/dev-postgres.sh url claims)" -v ON_ERROR_STOP=1 -q -f "$f"
+done
 db/seed/apply-reason-texts.sh "$(scripts/dev-postgres.sh url claims)"
 
 # synthetic data (Hardhat dev addresses, made-up amounts)
@@ -60,12 +86,19 @@ python3 -m venv injector/.venv && injector/.venv/bin/pip install -e injector
 injector/.venv/bin/python injector/inject_claims.py --fixture \
   --dsn "$(scripts/dev-postgres.sh url claims)" --data-version fixture-1
 
-# API on :8080, frontend on :5173 (proxies /api to :8080)
-DATABASE_URL="$(scripts/dev-postgres.sh url claims)" pnpm --filter @hcp/backend dev
+# roles, then lookup :8081, confirm :8082, proxy :8080, frontend :5173
+db/ops/setup-roles.sh --local
+pnpm --filter @hcp/backend dev
+pnpm --filter @hcp/backend dev:confirm
+pnpm --filter @hcp/backend dev:proxy
 pnpm --filter @hcp/frontend dev
+
+# synthetic confirmation candidate (fixture address only; uses the local owner URL)
+psql "$(grep '^DATABASE_URL=' backend/.env.owner | cut -d= -f2-)" -v ON_ERROR_STOP=1 -f db/ops/fixture-candidates.sql
 
 # checks
 pnpm --filter @hcp/backend test                                        # unit + http tests
+pnpm test:ops                                                          # candidate selection
 TEST_DATABASE_URL="$(scripts/dev-postgres.sh url claims)" pnpm --filter @hcp/backend test   # + integration
 pnpm build                                                             # shared, backend, frontend
 pnpm shellcheck
@@ -86,15 +119,18 @@ All scripts are idempotent bash over `gcloud`/`curl`; re-running is safe.
    5. `infra/cloudflare/setup-dns.sh --acme-only` - creates only the DNS-only `_acme-challenge` CNAMEs.
    6. `infra/gcp/30-setup-load-balancer.sh` - waits for the certificate to report `ACTIVE` without sending traffic to an unready origin.
 3. Application:
-   1. `backend/deploy/deploy-backend.sh` - builds locally, uploads over IAP, applies pending `db/migrations/*.sql`, seeds reason texts, installs the unit, restarts, health-checks.
+   1. `backend/deploy/deploy-backend.sh` - builds locally, uploads over IAP, applies pending `db/migrations/*.sql`, seeds reason texts, runs `db/ops/setup-roles.sh --vm`, installs the lookup, confirmation, and proxy units, restarts, health-checks.
    2. `frontend/deploy/deploy-frontend.sh` - builds, `gcloud storage rsync` to the bucket, cache headers, CDN invalidation.
 4. Data:
    - Until the embargo is lifted, load only synthetic data on the public VM:
      `backend/deploy/tunnel-db.sh` (keep open), then
      `python3 injector/inject_claims.py --fixture --dsn "$(backend/deploy/tunnel-db.sh --print-dsn)" --data-version fixture-1`.
-   - Embargo-lift step (operator decision): with the tunnel open,
+   - Release step (only after global routing, routing initial-stage, and the
+     materialized initial-stage summary all report `ready`): with the tunnel open,
      `python3 injector/inject_claims.py --migration-repo ~/git/harmony-migration --dsn "$(backend/deploy/tunnel-db.sh --print-dsn)" --data-version 2026-09-17 --validator-names`.
-     Run `--dry-run` first. The load is a staging-schema swap, so the API never sees partial data.
+     Run `--dry-run` first. The injector refuses a real load while any release
+     gate is held. A permitted load is a staging-schema swap, so the API never
+     sees partial data.
 5. Public cutover:
    1. `infra/cloudflare/setup-dns.sh --cutover [--rate-limit]` - creates proxied A records, keeps the ACME CNAMEs DNS-only, and applies SSL Full (strict), Always Use HTTPS, and TLS 1.2+.
    2. Verify `curl -fsS https://$DOMAIN/api/health` and a known approved fixture or real claim.
