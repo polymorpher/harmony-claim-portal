@@ -11,8 +11,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "dev": "tsx watch --env-file=.env src/server.ts",
-    "start": "node --env-file=.env dist/server.js",
+    "dev": "tsx watch --env-file=.env.read src/server.ts",
+    "dev:confirm": "tsx watch --env-file=.env.confirm src/confirm-server.ts",
+    "dev:proxy": "tsx watch src/proxy.ts",
+    "start": "node dist/server.js",
     "test": "vitest run"
   },
   "dependencies": {

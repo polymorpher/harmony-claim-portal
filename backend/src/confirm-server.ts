@@ -1,17 +1,17 @@
-import { buildApp } from "./app.js";
-import { loadConfig } from "./config.js";
-import { PgRepository } from "./repository.js";
+import { buildConfirmApp } from "./confirm/app.js";
+import { PgConfirmStore } from "./confirm/store.js";
+import { loadConfirmConfig } from "./config.js";
 
 async function main(): Promise<void> {
-  const config = loadConfig();
-  const repo = new PgRepository(config.databaseUrl);
-  if (config.enforceDbPrivileges) await repo.checkPrivileges();
-  const app = await buildApp({ config, repo });
+  const config = loadConfirmConfig();
+  const store = new PgConfirmStore(config.databaseUrl);
+  if (config.enforceDbPrivileges) await store.checkPrivileges();
+  const app = await buildConfirmApp({ config, store });
 
   const shutdown = async (signal: string) => {
     app.log.info({ signal }, "shutting down");
     await app.close();
-    await repo.close();
+    await store.close();
     process.exit(0);
   };
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
