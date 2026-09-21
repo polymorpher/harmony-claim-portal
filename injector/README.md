@@ -1,9 +1,10 @@
 # Claim injector
 
 `inject_claims.py` reads the WONE-aware cutoff claims, final account-policy
-categories, contract treatments, exchange audits, vault-share ledgers, and
-sparse routing exceptions from a local `harmony-migration` checkout and loads
-them into the claim portal database.
+categories, migration-stage policy, materialized initial-stage plan, contract
+treatments, exchange audits, staged validator-vault partitions, and sparse
+routing exceptions from a local `harmony-migration` checkout and loads them
+into the claim portal database.
 
 The load is atomic: every data table is filled in a `claims_staging` schema
 with `COPY`, verified, and then swapped into `public` inside one transaction,
@@ -30,6 +31,8 @@ python3 inject_claims.py --migration-repo ~/git/harmony-migration --dry-run
 python3 inject_claims.py --fixture --dsn "$(../scripts/dev-postgres.sh url claims)" --data-version fixture-1
 
 # production load through the IAP tunnel (backend/deploy/tunnel-db.sh)
+# Refused unless global, routing initial-stage, and materialized initial-stage
+# statuses all report ready.
 PGPASSWORD=... python3 inject_claims.py \
   --migration-repo ~/git/harmony-migration \
   --dsn postgres://claimapi@localhost:5433/claims \
@@ -57,6 +60,10 @@ Flags:
   (hard error);
 - only `ready`, `hold`, `not_issuing`, and terminal `redistributed` routing
   statuses are accepted (hard error);
+- every threshold-qualified row appears exactly once in the stage policy, and
+  compiled terminal deductions reconcile to its migration allocation;
+- materialized initial-stage wallet, vault-share, and validator-vault amounts
+  exactly match the stage policy and staged vault partition;
 - delegation sums per delegator equal the account's `staked_to_vault`
   (reported as warnings);
 - every referenced validator has a vault row (hard error).
