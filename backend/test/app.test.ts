@@ -75,6 +75,13 @@ describe("http surface", () => {
       headers: { "cf-connecting-ip": "198.51.100.7", "x-forwarded-for": "203.0.113.9" },
     });
     expect(other.statusCode).toBe(200);
+    // a different browser on the same IP is its own client; the address is not the limit
+    const otherBrowser = await app.inject({
+      method: "GET",
+      url: `/api/v1/claims/${ADDR.eoa}`,
+      headers: { "x-forwarded-for": "203.0.113.9, 130.211.0.1", "user-agent": "OtherBrowser/1.0" },
+    });
+    expect(otherBrowser.statusCode).toBe(200);
   });
 
   it("has no enumeration endpoints", async () => {
