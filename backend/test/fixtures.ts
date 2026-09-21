@@ -32,6 +32,10 @@ export const ADDR = {
   deducted: "0x3333333333333333333333333333333333333333",
   unknown: "0x4444444444444444444444444444444444444444",
   exchangeOnly: "0x5555555555555555555555555555555555555555",
+  inactive: "0x6666666666666666666666666666666666666666",
+  smartvault: "0x7777777777777777777777777777777777777777",
+  stageMissing: "0x8888888888888888888888888888888888888888",
+  exchangeDeferred: "0x9999999999999999999999999999999999999999",
 } as const;
 
 export function account(partial: Partial<AccountRow> & { address: string }): AccountRow {
@@ -43,6 +47,12 @@ export function account(partial: Partial<AccountRow> & { address: string }): Acc
   const nativeTotal = partial.native_total_claim_atto ?? (BigInt(nativeWallet) + BigInt(staked)).toString();
   const qualification = partial.qualification_total_atto ?? (BigInt(nativeTotal) + BigInt(woneBalance)).toString();
   const total = partial.total_claim_atto ?? (BigInt(wallet) + BigInt(staked)).toString();
+  const qualified = BigInt(qualification) >= 1000n * ONE;
+  const issuance = partial.issuance_treatment ?? "issue";
+  const stageWallet = partial.migration_wallet_allocation_atto ?? (issuance === "issue" ? wallet : "0");
+  const stageStaked = partial.migration_staked_to_vault_atto ?? (issuance === "issue" ? staked : "0");
+  const stageTotal = partial.migration_allocation_atto ??
+    (BigInt(stageWallet) + BigInt(stageStaked)).toString();
   return {
     secure_key: "00".repeat(32),
     address_resolved: true,
@@ -52,7 +62,14 @@ export function account(partial: Partial<AccountRow> & { address: string }): Acc
     contract_subcategory: null,
     contract_identity: null,
     contract_treatment: null,
-    policy_category: BigInt(qualification) >= 1000n * ONE ? "automatic" : "deferred",
+    policy_category: qualified ? "automatic" : "deferred",
+    stage_policy_applied: qualified,
+    migration_stage: qualified ? "initial" : "below_threshold",
+    issuance_treatment: issuance,
+    stage_reason: qualified ? "wallet activity is within initial window" : "below threshold",
+    migration_wallet_allocation_atto: stageWallet,
+    migration_staked_to_vault_atto: stageStaked,
+    migration_allocation_atto: stageTotal,
     liquid_shard0_atto: nativeWallet,
     liquid_shard1_atto: "0",
     active_staked_or_delegated_atto: staked,
@@ -67,7 +84,7 @@ export function account(partial: Partial<AccountRow> & { address: string }): Acc
     qualification_total_atto: qualification,
     native_total_claim_atto: nativeTotal,
     total_claim_atto: total,
-    meets_threshold: BigInt(qualification) >= 1000n * ONE,
+    meets_threshold: qualified,
     last_activity_time_utc: null,
     last_activity_block: null,
     last_activity_shard: null,
@@ -90,10 +107,22 @@ export const accounts: AccountRow[] = [
   account({
     address: ADDR.excl,
     account_category: "excluded",
+    issuance_treatment: "not_issued",
+    migration_stage: null,
+    migration_wallet_allocation_atto: "0",
+    migration_staked_to_vault_atto: "0",
+    migration_allocation_atto: "0",
     wallet_airdrop_atto: one(1000),
     staked_to_vault_atto: one(4000),
   }),
-  account({ address: ADDR.partial, wallet_airdrop_atto: one(8000), staked_to_vault_atto: one(2000) }),
+  account({
+    address: ADDR.partial,
+    wallet_airdrop_atto: one(8000),
+    staked_to_vault_atto: one(2000),
+    migration_wallet_allocation_atto: one(3000),
+    migration_staked_to_vault_atto: one(2000),
+    migration_allocation_atto: one(5000),
+  }),
   account({
     address: ADDR.safe,
     account_category: "contract",
@@ -103,6 +132,7 @@ export const accounts: AccountRow[] = [
     contract_identity: "2-of-3 fixture Safe",
     contract_treatment: "multisig_next_stage",
     policy_category: "contract_review",
+    migration_stage: "next_stage",
     wallet_airdrop_atto: one(50_000),
   }),
   account({
@@ -124,6 +154,7 @@ export const accounts: AccountRow[] = [
     contract_primary_category: "onewallet",
     contract_treatment: "onewallet_recovery",
     policy_category: "contract_review",
+    migration_stage: "next_stage",
     wallet_airdrop_atto: one(2000),
   }),
   account({
@@ -133,9 +164,54 @@ export const accounts: AccountRow[] = [
     contract_primary_category: "known-app",
     contract_treatment: "bridge_later_portal",
     policy_category: "contract_review",
+    migration_stage: "next_stage",
     wallet_airdrop_atto: one(3000),
   }),
-  account({ address: ADDR.deducted, wallet_airdrop_atto: one(5000) }),
+  account({
+    address: ADDR.deducted,
+    wallet_airdrop_atto: one(5000),
+    issuance_treatment: "not_issued",
+    migration_stage: null,
+    migration_wallet_allocation_atto: "0",
+    migration_staked_to_vault_atto: "0",
+    migration_allocation_atto: "0",
+  }),
+  account({
+    address: ADDR.exchangeDeferred,
+    wallet_airdrop_atto: one(2500),
+    policy_category: "excluded",
+    migration_stage: "deferred",
+    stage_reason: "wallet activity predates initial window",
+  }),
+  account({
+    address: ADDR.inactive,
+    wallet_airdrop_atto: one(5000),
+    migration_stage: "deferred",
+    stage_reason: "wallet activity predates initial window",
+  }),
+  account({
+    address: ADDR.smartvault,
+    account_category: "contract",
+    code_bearing: true,
+    contract_primary_category: "smartvault-wallet",
+    contract_treatment: "contract_not_issued",
+    policy_category: "contract_review",
+    issuance_treatment: "not_issued",
+    migration_stage: null,
+    migration_wallet_allocation_atto: "0",
+    migration_staked_to_vault_atto: "0",
+    migration_allocation_atto: "0",
+    wallet_airdrop_atto: one(2500),
+  }),
+  account({
+    address: ADDR.stageMissing,
+    wallet_airdrop_atto: one(2500),
+    stage_policy_applied: false,
+    migration_stage: null,
+    migration_wallet_allocation_atto: "0",
+    migration_staked_to_vault_atto: "0",
+    migration_allocation_atto: "0",
+  }),
 ];
 
 export const delegations: DelegationRow[] = [
@@ -148,12 +224,32 @@ export const delegations: DelegationRow[] = [
 ];
 
 export const vaults: VaultRow[] = [
-  { validator_address: ADDR.v1, vault_assets_atto: one(17_005), priority_staked_to_vault_atto: one(17_000), deferred_staked_to_vault_atto: one(5), delegation_rows: 5, governor_destination_id: null, governor_status: "ready", validator_name: "Fixture One" },
-  { validator_address: ADDR.v2, vault_assets_atto: one(22_500), priority_staked_to_vault_atto: one(22_500), deferred_staked_to_vault_atto: "0", delegation_rows: 3, governor_destination_id: null, governor_status: "hold", validator_name: null },
+  {
+    validator_address: ADDR.v1, vault_assets_atto: one(17_005),
+    priority_staked_to_vault_atto: one(17_000), deferred_staked_to_vault_atto: one(5),
+    delegation_rows: 5, governor_destination_id: null, governor_status: "ready",
+    validator_name: "Fixture One", initial_assets_atto: one(14_000),
+    next_stage_assets_atto: "0", qualified_deferred_assets_atto: one(5),
+    manual_review_assets_atto: "0", uncompiled_deferred_assets_atto: "0",
+    not_issued_assets_atto: one(3000), post_policy_assets_atto: one(14_005),
+  },
+  {
+    validator_address: ADDR.v2, vault_assets_atto: one(22_500),
+    priority_staked_to_vault_atto: one(22_500), deferred_staked_to_vault_atto: "0",
+    delegation_rows: 3, governor_destination_id: null, governor_status: "hold",
+    validator_name: null, initial_assets_atto: one(20_000),
+    next_stage_assets_atto: "0", qualified_deferred_assets_atto: one(1500),
+    manual_review_assets_atto: "0", uncompiled_deferred_assets_atto: "0",
+    not_issued_assets_atto: one(1000), post_policy_assets_atto: one(21_500),
+  },
 ];
 
 const ex = (p: Partial<ExceptionRow> & Pick<ExceptionRow, "component" | "source_address" | "amount_atto" | "exception_type" | "destination_status">): ExceptionRow => ({
   source_category: "ordinary_eoa",
+  migration_stage: p.migration_stage ?? "initial",
+  issuance_treatment: p.issuance_treatment ??
+    (p.destination_status === "not_issuing" ? "not_issued" :
+      p.destination_status === "redistributed" ? "redistributed" : "issue"),
   validator_address: null,
   route_id: "r",
   route_priority: 100,
@@ -182,6 +278,8 @@ export const exchangeWallets: ExchangeRow[] = [
     address: ADDR.gate,
     delivery_policy: "automatic_threshold",
     qualification_status: "below_threshold",
+    migration_stage: "below_threshold",
+    issuance_treatment: "issue",
     planned_delivery_status: "below_threshold_not_airdropped",
     configured_destination: null,
     configured_destination_status: "not_required_same_address",
@@ -192,6 +290,8 @@ export const exchangeWallets: ExchangeRow[] = [
     address: ADDR.exchange,
     delivery_policy: "manual_current_claim",
     qualification_status: "qualified",
+    migration_stage: "initial",
+    issuance_treatment: "issue",
     planned_delivery_status: "manual_exchange_route",
     configured_destination: ADDR.eoa,
     configured_destination_status: "ready",
@@ -202,7 +302,21 @@ export const exchangeWallets: ExchangeRow[] = [
     address: ADDR.exchangeOnly,
     delivery_policy: "manual_current_claim",
     qualification_status: "below_threshold",
+    migration_stage: "below_threshold",
+    issuance_treatment: "issue",
     planned_delivery_status: "no_cutoff_claim",
+    configured_destination: ADDR.eoa,
+    configured_destination_status: "ready",
+  },
+  {
+    exchange_id: "okx",
+    display_name: "OKX",
+    address: ADDR.exchangeDeferred,
+    delivery_policy: "manual_current_claim",
+    qualification_status: "qualified",
+    migration_stage: "deferred",
+    issuance_treatment: "issue",
+    planned_delivery_status: "deferred_stage_not_initial",
     configured_destination: ADDR.eoa,
     configured_destination_status: "ready",
   },

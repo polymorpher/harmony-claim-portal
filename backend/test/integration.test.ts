@@ -45,7 +45,7 @@ suite("integration against fixture database", () => {
     expect(body.account_type).toBe("excluded");
     expect(body.wallet_airdrop.issuable_atto).toBe("0");
     expect(body.eligibility.total_claim_atto).toBe("0");
-    expect(body.eligibility.meets_threshold).toBe(false);
+    expect(body.eligibility.meets_threshold).toBe(true);
     expect(body.eligibility.status).toBe("not_issuing");
     expect(body.vault_positions).toHaveLength(2);
     for (const p of body.vault_positions) expect(p.expected_shares_atto).toBe("0");
@@ -68,6 +68,7 @@ suite("integration against fixture database", () => {
     expect(body.contract_category).toBe("multisig-wallet");
     expect(body.eligibility).toBeNull();
     expect(body.disposition.code).toBe("multisig_next_stage");
+    expect(body.migration_policy.total_allocation_atto).toBeNull();
   });
 
   it("deferred fixture account with explicit route and hold remainder", async () => {
@@ -79,7 +80,7 @@ suite("integration against fixture database", () => {
     expect(body.wallet_airdrop.held_one).toBe("300");
     expect(body.wallet_airdrop.issuable_one).toBe("0");
     expect(body.wallet_airdrop.destination.status).toBe("hold");
-    expect(body.disposition.code).toBe("gate_aggregate_pending");
+    expect(body.disposition.code).toBe("gate_deferred");
   });
 
   it("loads WONE component fields from the fixture", async () => {
@@ -95,7 +96,9 @@ suite("integration against fixture database", () => {
     const res = await app.inject({ method: "GET", url: `/api/v1/claims/${exchange}` });
     const body = res.json();
     expect(body.exchange_treatments[0].display_name).toBe("OKX");
-    expect(body.disposition.code).toBe("handled_by_exchange");
+    expect(body.migration_policy.stage).toBe("deferred");
+    expect(body.disposition.code).toBe("deferred");
+    expect(body.wallet_airdrop.issuable_atto).toBe("0");
   });
 
   it("does not assign an entitlement or destination to exchange-only inventory", async () => {

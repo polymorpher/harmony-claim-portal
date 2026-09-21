@@ -120,7 +120,8 @@ describe("claim lookup shape", () => {
     expect(Object.keys(r.wallet_airdrop!)).toEqual([
       "gross_atto", "gross_one", "not_issued_atto", "not_issued_one",
       "redistributed_atto", "redistributed_one", "held_atto", "held_one",
-      "net_atto", "net_one", "issuable_atto", "issuable_one", "destination",
+      "net_atto", "net_one", "initial_stage_atto", "initial_stage_one",
+      "issuable_atto", "issuable_one", "destination",
     ]);
     const p = r.vault_positions[0];
     for (const k of ["staked_atto", "not_issued_atto", "held_atto", "expected_shares_atto", "staked_one", "expected_shares_one"]) {
@@ -144,6 +145,7 @@ describe("claim lookup shape", () => {
     expect(r.eligibility?.meets_threshold).toBe(false);
     expect(r.notes.some((n) => /below the 1,000 ONE threshold/.test(n))).toBe(true);
     expect(r.vault_positions[0].priority).toBe(false);
+    expect(r.migration_policy?.total_allocation_atto).toBe("0");
   });
 
   it("validator account: same-address adjustments and note", async () => {
@@ -173,8 +175,9 @@ describe("claim lookup shape", () => {
     expect(r.adjustments[0].title).toBe("Deduction: extra-mint");
     expect(r.notes.some((n) => /5,000 ONE is not issued/.test(n))).toBe(true);
     expect(r.eligibility?.total_claim_one).toBe("0");
-    expect(r.eligibility?.meets_threshold).toBe(false);
+    expect(r.eligibility?.meets_threshold).toBe(true);
     expect(r.eligibility?.status).toBe("not_issuing");
+    expect(r.migration_policy?.issuance_treatment).toBe("not_issued");
     expect(r.notes.some((n) => /vault governor/.test(n))).toBe(true);
   });
 
@@ -199,6 +202,7 @@ describe("claim lookup shape", () => {
     expect(r.wallet_airdrop).toBeNull();
     expect(r.adjustments).toEqual([]);
     expect(r.notes[0]).toMatch(/smart contract \(multisig-wallet\)/);
+    expect(r.migration_policy?.total_allocation_atto).toBeNull();
   });
 
   it("contract amounts shown when EXPOSE_CONTRACT_AMOUNTS=true", async () => {
@@ -224,7 +228,7 @@ describe("claim lookup shape", () => {
     const r = await lookup(ADDR.deducted);
     expect(r.eligibility?.gross_total_claim_one).toBe("5000");
     expect(r.eligibility?.total_claim_one).toBe("0");
-    expect(r.eligibility?.meets_threshold).toBe(false);
+    expect(r.eligibility?.meets_threshold).toBe(true);
     expect(r.eligibility?.status).toBe("not_issuing");
     expect(r.disposition?.code).toBe("not_issuing");
   });
@@ -232,16 +236,24 @@ describe("claim lookup shape", () => {
   it("routes non-Gate exchange wallets through the exchange", async () => {
     const r = await lookup(ADDR.exchange);
     expect(r.disposition?.code).toBe("handled_by_exchange");
-    expect(r.disposition?.title).toBe("Handled by OKX");
+    expect(r.disposition?.title).toBe("Initial stage — handled by OKX");
     expect(r.disposition?.destination).toEqual({ address: ADDR.eoa, status: "ready" });
     expect(r.eligibility?.status).toBe("handled_by_exchange");
   });
 
-  it("keeps Gate priority explicit and marks deferred Gate routing TBD", async () => {
+  it("does not let a ready exchange destination promote a deferred stage", async () => {
+    const r = await lookup(ADDR.exchangeDeferred);
+    expect(r.migration_policy?.stage).toBe("deferred");
+    expect(r.disposition?.code).toBe("deferred");
+    expect(r.wallet_airdrop?.issuable_atto).toBe("0");
+    expect(r.exchange_treatments[0].destination.status).toBe("ready");
+  });
+
+  it("keeps Gate initial-stage status explicit without inventing an aggregate route", async () => {
     const r = await lookup(ADDR.gate);
     expect(r.eligibility?.status).toBe("deferred");
-    expect(r.disposition?.code).toBe("gate_aggregate_pending");
-    expect(r.disposition?.detail).toMatch(/still to be determined/);
+    expect(r.disposition?.code).toBe("gate_deferred");
+    expect(r.disposition?.detail).toMatch(/no aggregate reroute/);
     expect(r.wallet_airdrop?.issuable_atto).toBe("0");
     expect(r.wallet_airdrop?.held_atto).toBe(r.wallet_airdrop?.net_atto);
     expect(r.wallet_airdrop?.destination).toEqual({ address: null, status: "hold" });
@@ -262,6 +274,37 @@ describe("claim lookup shape", () => {
     const bridge = await lookup(ADDR.bridge);
     expect(bridge.disposition?.title).toBe("Bridge contract");
     expect(bridge.disposition?.detail).toMatch(/dedicated claim portal/);
+  });
+
+  it("does not put a threshold-qualified inactive wallet in the initial stage", async () => {
+    const r = await lookup(ADDR.inactive);
+    expect(r.eligibility?.meets_threshold).toBe(true);
+    expect(r.eligibility?.status).toBe("deferred");
+    expect(r.migration_policy?.stage).toBe("deferred");
+    expect(r.wallet_airdrop?.initial_stage_atto).toBe("0");
+    expect(r.wallet_airdrop?.issuable_atto).toBe("0");
+    expect(r.disposition?.code).toBe("deferred");
+  });
+
+  it("fails closed when a qualified account has no loaded stage policy", async () => {
+    const r = await lookup(ADDR.stageMissing);
+    expect(r.eligibility?.meets_threshold).toBe(true);
+    expect(r.eligibility?.status).toBe("deferred");
+    expect(r.migration_policy?.stage_policy_applied).toBe(false);
+    expect(r.migration_policy?.total_allocation_atto).toBe("0");
+    expect(r.disposition?.code).toBe("hold");
+    expect(r.wallet_airdrop?.issuable_atto).toBe("0");
+  });
+
+  it("shows reviewed SmartVault as not issued even when contract amounts are hidden", async () => {
+    const r = await lookup(ADDR.smartvault);
+    expect(r.account_type).toBe("contract");
+    expect(r.eligibility).toBeNull();
+    expect(r.migration_policy?.snapshot_qualified).toBe(true);
+    expect(r.migration_policy?.issuance_treatment).toBe("not_issued");
+    expect(r.migration_policy?.total_allocation_atto).toBeNull();
+    expect(r.disposition?.code).toBe("not_issuing");
+    expect(r.notes.join(" ")).toMatch(/2050 premint reserve/);
   });
 
   it("unknown address: found=false with a note and meta", async () => {
