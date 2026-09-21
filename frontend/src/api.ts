@@ -1,4 +1,11 @@
-import type { ApiError, ClaimResponse, MetaResponse } from "@hcp/shared";
+import type {
+  ApiError,
+  ClaimResponse,
+  ConfirmationChallenge,
+  ConfirmationReceipt,
+  ConfirmationStatus,
+  MetaResponse,
+} from "@hcp/shared";
 
 const BASE = "/api";
 
@@ -13,8 +20,11 @@ export class ApiRequestError extends Error {
   }
 }
 
-async function request<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, { headers: { accept: "application/json" } });
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    ...init,
+    headers: { accept: "application/json", ...init?.headers },
+  });
   if (res.ok) return (await res.json()) as T;
   let message = res.statusText || `HTTP ${res.status}`;
   try {
@@ -27,6 +37,34 @@ async function request<T>(path: string): Promise<T> {
   throw new ApiRequestError(res.status, message, retry ? Number(retry) : null);
 }
 
+function postJson<T>(path: string, body: unknown): Promise<T> {
+  return request<T>(path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 export const fetchMeta = () => request<MetaResponse>("/v1/meta");
 export const fetchClaim = (address: string) =>
   request<ClaimResponse>(`/v1/claims/${encodeURIComponent(address.trim())}`);
+export const fetchConfirmation = (address: string) =>
+  request<ConfirmationStatus>(`/v1/confirmations/${encodeURIComponent(address.trim())}`);
+export const createConfirmationChallenge = (address: string) =>
+  postJson<ConfirmationChallenge>("/v1/confirmations/challenges", { address });
+export const submitConfirmation = (
+  address: string,
+  nonce: string,
+  issuedAt: string,
+  signature: string,
+  dataVersion: string,
+  policyVersion: string,
+) =>
+  postJson<ConfirmationReceipt>("/v1/confirmations", {
+    address,
+    nonce,
+    issued_at: issuedAt,
+    signature,
+    data_version: dataVersion,
+    policy_version: policyVersion,
+  });

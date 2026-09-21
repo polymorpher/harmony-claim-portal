@@ -78,6 +78,10 @@ export function App() {
 
   return (
     <div className="page">
+      <nav className="nav">
+        <a href="/" aria-current="page">Lookup</a>
+        <a href="/confirm">Confirm</a>
+      </nav>
       <header className="header">
         <div>
           <h1>Harmony migration claim lookup</h1>
@@ -90,8 +94,9 @@ export function App() {
 
       {meta.data?.routing_status === "hold" && (
         <div className="banner warn">
-          <strong>Routing preview.</strong> Claim accounting is available for review, but unresolved destinations
-          and policy decisions remain. Displayed routing is not a final issuance authorization.
+          <strong>Migration-stage preview.</strong> Snapshot qualification, migration stage, and routing are
+          available for review, but unresolved destinations and policy decisions remain. Displayed routing is not
+          a final issuance authorization.
         </div>
       )}
 
@@ -172,12 +177,13 @@ export function App() {
               {meta.data.fixture ? " (synthetic test data)" : ""}
             </span>
             <span>Routing status: {meta.data.routing_status ?? "-"}</span>
+            <span>Initial-stage status: {meta.data.initial_stage_status ?? "-"}</span>
           </>
         ) : (
           <span className="muted">Loading cutoff information…</span>
         )}
         <span className="muted">
-          This page only reads a single address at a time. It never asks you to sign anything.
+          This lookup reads one address at a time and does not ask for a signature. Older wallets confirm control on the confirmation page.
         </span>
       </footer>
     </div>
