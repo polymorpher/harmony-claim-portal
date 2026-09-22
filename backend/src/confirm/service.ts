@@ -21,7 +21,10 @@ export class ConfirmError extends Error {
 const SIGNATURE = /^0x[0-9a-fA-F]{130}$/;
 const NONCE = /^[0-9a-f]{64}$/;
 const ISSUED = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
-const NOT_ELIGIBLE = "This address is not in the current next-batch confirmation set.";
+const NOT_ELIGIBLE =
+  "This wallet cannot be confirmed here. Only wallets left out because they had no Harmony activity in the six months before the cutoff can use this page.";
+const ALREADY_CONFIRMED = "This wallet has already confirmed activity.";
+const BAD_REQUEST = "This signing request is invalid. Try again.";
 const CLOCK_SKEW_MS = 60_000;
 
 export interface ConfirmServiceOptions {
@@ -78,7 +81,7 @@ export class ConfirmService {
     const candidate = await this.store.findCandidate(address);
     if (!candidate) throw new ConfirmError(403, NOT_ELIGIBLE);
     const existing = await this.store.findConfirmation(address, candidate.data_version, candidate.policy_version);
-    if (existing) throw new ConfirmError(409, "a confirmation is already recorded for this data version");
+    if (existing) throw new ConfirmError(409, ALREADY_CONFIRMED);
     const forms = addressForms(address);
     const issuedAt = this.now().toISOString();
     const nonce = randomBytes(32).toString("hex");
@@ -101,12 +104,12 @@ export class ConfirmService {
     signature: string,
     signedVersion?: { dataVersion: string; policyVersion: string },
   ): Promise<ConfirmationReceipt> {
-    if (!NONCE.test(nonce) || !ISSUED.test(issuedAt)) throw new ConfirmError(400, "invalid challenge");
-    if (!SIGNATURE.test(signature)) throw new ConfirmError(400, "invalid signature");
+    if (!NONCE.test(nonce) || !ISSUED.test(issuedAt)) throw new ConfirmError(400, BAD_REQUEST);
+    if (!SIGNATURE.test(signature)) throw new ConfirmError(400, BAD_REQUEST);
     const issuedMs = Date.parse(issuedAt);
     const nowMs = this.now().getTime();
-    if (issuedMs > nowMs + CLOCK_SKEW_MS) throw new ConfirmError(400, "challenge is not valid yet");
-    if (nowMs - issuedMs > this.opts.challengeTtlSeconds * 1000) throw new ConfirmError(400, "challenge expired");
+    if (issuedMs > nowMs + CLOCK_SKEW_MS) throw new ConfirmError(400, "This confirmation is not valid yet.");
+    if (nowMs - issuedMs > this.opts.challengeTtlSeconds * 1000) throw new ConfirmError(400, "This confirmation expired. Sign again.");
 
     const candidate = await this.store.findCandidate(address);
     if (!candidate) throw new ConfirmError(403, NOT_ELIGIBLE);
@@ -115,7 +118,7 @@ export class ConfirmService {
       (signedVersion.dataVersion !== candidate.data_version ||
         signedVersion.policyVersion !== candidate.policy_version)
     ) {
-      throw new ConfirmError(409, "confirmation set changed; request a new challenge");
+      throw new ConfirmError(409, "The migration data was updated. Sign again.");
     }
 
     const existing = await this.store.findConfirmation(address, candidate.data_version, candidate.policy_version);
@@ -128,7 +131,7 @@ export class ConfirmService {
     } catch {
       valid = false;
     }
-    if (!valid) throw new ConfirmError(400, "signature does not match this address and challenge");
+    if (!valid) throw new ConfirmError(400, "The signature does not match this wallet and message.");
 
     const result = await this.store.insertConfirmation({
       address,
@@ -152,7 +155,7 @@ export class ConfirmService {
       const again = await this.store.findConfirmation(address, candidate.data_version, candidate.policy_version);
       if (again) return this.replay(address, again, signature);
     }
-    throw new ConfirmError(409, "confirmation set changed; request a new challenge");
+    throw new ConfirmError(409, "The migration data was updated. Sign again.");
   }
 
   private messageFor(
@@ -174,7 +177,7 @@ export class ConfirmService {
 
   private replay(address: string, existing: { signature: string; data_version: string; policy_version: string; created_at: string }, signature: string): ConfirmationReceipt {
     if (!sameSignature(existing.signature, signature)) {
-      throw new ConfirmError(409, "a different confirmation is already recorded for this data version");
+      throw new ConfirmError(409, ALREADY_CONFIRMED);
     }
     return {
       address: addressForms(address),

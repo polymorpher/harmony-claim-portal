@@ -1,5 +1,5 @@
 export const CONFIRM_PURPOSE =
-  "Request that this deferred allocation be considered for a later migration batch.";
+  "Confirm that this wallet is still active.";
 
 export interface ConfirmationMessageInput {
   domain: string;
@@ -19,12 +19,12 @@ export interface ConfirmationMessageInput {
  */
 export function confirmationMessage(input: ConfirmationMessageInput): string {
   return [
-    `${input.domain} confirmation of control for a Harmony migration address`,
+    `${input.domain} activity confirmation for a Harmony migration address`,
     "",
     `Domain: ${input.domain}`,
     `Address: ${input.address}`,
     `Purpose: ${CONFIRM_PURPOSE}`,
-    "This signature does not transfer funds, authorize a transaction, or guarantee inclusion.",
+    "This signature does not transfer funds or authorize a transaction.",
     `Issued: ${input.issuedAt}`,
     `Nonce: ${input.nonce}`,
     `Cutoff: ${input.cutoffTime}`,

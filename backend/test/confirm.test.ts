@@ -132,6 +132,8 @@ describe("confirmation API", () => {
       payload: { address: other.address },
     });
     expect(res.statusCode).toBe(403);
+    expect(res.json().message).toMatch(/cannot be confirmed here/);
+    expect(res.json().message).toMatch(/no Harmony activity in the six months/);
   });
 
   it("issues a personal_sign message bound to the candidate version", async () => {
@@ -139,8 +141,8 @@ describe("confirmation API", () => {
     expect(body.message).toContain("Domain: migrate.country");
     expect(body.message).toContain(`Address: ${account.address}`);
     expect(body.message).toContain(CONFIRM_PURPOSE);
-    expect(body.message).toContain("does not transfer funds");
-    expect(body.message).toContain("or guarantee inclusion");
+    expect(body.message).toContain("does not transfer funds or authorize a transaction");
+    expect(body.message).not.toContain("guarantee inclusion");
     expect(body.message).toContain(`Issued: ${body.issued_at}`);
     expect(body.message).toContain(`Nonce: ${body.nonce}`);
     expect(body.message).toContain("Cutoff: 2026-09-10T14:00:00.000Z");
@@ -194,6 +196,7 @@ describe("confirmation API", () => {
       payload: { address },
     });
     expect(second.statusCode).toBe(409);
+    expect(second.json().message).toBe("This wallet has already confirmed activity.");
   });
 
   it("rejects a signature from a different key", async () => {
@@ -245,7 +248,7 @@ describe("confirmation API", () => {
       payload: { address: addr, nonce: body.nonce, issued_at: body.issued_at, signature },
     });
     expect(res.statusCode).toBe(400);
-    expect(res.json().message).toMatch(/expired/);
+    expect(res.json().message).toMatch(/expired/i);
     expect(store.confirmations.filter((row) => row.address === addr)).toHaveLength(0);
     now = new Date("2026-09-21T12:00:00.000Z");
   });
@@ -270,7 +273,7 @@ describe("confirmation API", () => {
       },
     });
     expect(res.statusCode).toBe(409);
-    expect(res.json().message).toMatch(/confirmation set changed/);
+    expect(res.json().message).toMatch(/migration data was updated/);
     expect(store.confirmations.filter((row) => row.address === addr)).toHaveLength(0);
   });
 });
