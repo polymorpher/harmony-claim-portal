@@ -472,6 +472,21 @@ function redactMigrationAmounts(policy: MigrationPolicy): MigrationPolicy {
   };
 }
 
+function leftOutOfInitialAirdrop(
+  account: { account_category: string } | null,
+  reason: string | null | undefined,
+): string | null {
+  if (!account) return null;
+  if (account.account_category !== "ordinary_eoa" && account.account_category !== "validator_account") return null;
+  if (reason === "wallet activity predates initial window") {
+    return "This wallet's last activity on Harmony was more than six months before the cutoff. Wallets like this are left out to keep dead and inaccessible wallets out of the migrated supply.";
+  }
+  if (reason === "no indexed wallet activity") {
+    return "No activity on Harmony was found for this wallet before the cutoff. Wallets like this are left out to keep dead and inaccessible wallets out of the migrated supply.";
+  }
+  return null;
+}
+
 function dispositionFor(
   account: AccountRow | null,
   exchanges: ExchangeTreatment[],
@@ -567,6 +582,15 @@ function dispositionFor(
       destination: { address: null, status: "hold" },
     };
   }
+  const leftOut = leftOutOfInitialAirdrop(account, migration?.stage_reason);
+  if (migration?.stage === "deferred" && leftOut) {
+    return {
+      code: "deferred",
+      title: "Not in the initial airdrop",
+      detail: leftOut,
+      destination: walletDestination ?? { address: null, status: "hold" },
+    };
+  }
   if (
     migration?.stage === "deferred" ||
     migration?.stage === "manual_review" ||
@@ -574,11 +598,15 @@ function dispositionFor(
   ) {
     return {
       code: "deferred",
-      title: migration.stage === "manual_review" ? "Manual review stage" : "Deferred",
+      title: migration.stage === "manual_review"
+        ? "Under review"
+        : migration.stage === "below_threshold"
+          ? "Below the minimum"
+          : "Not in the initial airdrop",
       detail: migration.stage_reason ? sentenceCase(migration.stage_reason) :
         (migration.stage === "below_threshold"
-          ? "This account is below the snapshot qualification threshold."
-          : "This eligible wallet is outside the current six-month activity stage."),
+          ? "This address's total at the cutoff was under the minimum, so it is not in the initial airdrop."
+          : "This wallet is not in the initial airdrop."),
       destination: walletDestination ?? { address: null, status: "hold" },
     };
   }
@@ -831,10 +859,10 @@ export function buildClaimResponse(
 
   if (!account.meets_threshold) {
     notes.push(
-      `The qualification total (${formatOne(qualificationTotal)} ONE) is below the ${formatOne(meta.threshold_atto, 0)} ONE threshold, so this account is deferred and not part of the prioritized distribution.`,
+      `This address's total at the cutoff (${formatOne(qualificationTotal)} ONE) is under the ${formatOne(meta.threshold_atto, 0)} ONE minimum, so it is not in the initial airdrop.`,
     );
   }
-  if (account.meets_threshold && migration.stage === "deferred") {
+  if (account.meets_threshold && migration.stage === "deferred" && !leftOutOfInitialAirdrop(account, migration.stage_reason)) {
     notes.push(
       `${migration.stage_reason ? sentenceCase(migration.stage_reason) : "This eligible wallet is outside the current six-month activity window."} Snapshot qualification is unchanged; the allocation is deferred to a later stage.`,
     );

@@ -143,7 +143,7 @@ describe("claim lookup shape", () => {
     const r = await lookup(ADDR.small);
     expect(r.eligibility?.status).toBe("deferred");
     expect(r.eligibility?.meets_threshold).toBe(false);
-    expect(r.notes.some((n) => /below the 1,000 ONE threshold/.test(n))).toBe(true);
+    expect(r.notes.some((n) => /under the 1,000 ONE minimum, so it is not in the initial airdrop/.test(n))).toBe(true);
     expect(r.vault_positions[0].priority).toBe(false);
     expect(r.migration_policy?.total_allocation_atto).toBe("0");
   });
