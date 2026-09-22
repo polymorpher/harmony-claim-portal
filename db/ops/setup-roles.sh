@@ -80,9 +80,10 @@ sys.stdout.write(unquote(u.password))' "$1"
 }
 
 env_value() {
-  local file="$1" key="$2"
+  local file="$1" key="$2" line
   [ -f "$file" ] || return 0
-  grep -E "^${key}=" "$file" | head -1 | cut -d= -f2- | tr -d '"'
+  line="$(grep -E "^${key}=" "$file" | head -1 || true)"
+  printf '%s' "${line#*=}" | tr -d '"'
 }
 
 ensure_password() {
