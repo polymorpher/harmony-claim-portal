@@ -78,9 +78,9 @@ export function App() {
 
   return (
     <div className="page">
-      <nav className="nav">
-        <a href="/" aria-current="page">Lookup</a>
-        <a href="/confirm">Confirm</a>
+      <nav className="nav" aria-label="Pages">
+        <a href="/" aria-current="page">Claim lookup</a>
+        <a href="/confirm">Confirm activity</a>
       </nav>
       <header className="header">
         <div>
@@ -94,9 +94,8 @@ export function App() {
 
       {meta.data?.routing_status === "hold" && (
         <div className="banner warn">
-          <strong>Migration-stage preview.</strong> Snapshot qualification, migration stage, and routing are
-          available for review, but unresolved destinations and policy decisions remain. Displayed routing is not
-          a final issuance authorization.
+          <strong>Preview.</strong> Amounts and stages shown here are still under review and may change before
+          tokens are issued.
         </div>
       )}
 
@@ -183,7 +182,8 @@ export function App() {
           <span className="muted">Loading cutoff information…</span>
         )}
         <span className="muted">
-          This lookup reads one address at a time and does not ask for a signature. Older wallets confirm control on the confirmation page.
+          Look up one address at a time. If your wallet was left out because it had no Harmony activity in the six months
+          before the cutoff, use the Confirm page to show it is still active.
         </span>
       </footer>
     </div>

@@ -36,8 +36,8 @@ function Banner({ claim }: { claim: ClaimResponse }) {
   if (!e.meets_threshold) {
     return (
       <div className="banner warn">
-        <strong>Deferred.</strong> Qualification total {one(e.qualification_total_atto)} ONE is below the {one(claim.meta.threshold_atto, 0)} ONE
-        threshold, so it is not part of the prioritized distribution.
+        <strong>Below the minimum.</strong> This address’s total at the cutoff was {one(e.qualification_total_atto)} ONE, under
+        the {one(claim.meta.threshold_atto, 0)} ONE minimum, so it is not in the initial airdrop.
       </div>
     );
   }
@@ -231,26 +231,50 @@ function Vaults({ positions }: { positions: VaultPosition[] }) {
   );
 }
 
+const STAGE_LABEL: Record<string, string> = {
+  initial: "Included",
+  deferred: "Not included",
+  next_stage: "Not included (handled in a later stage)",
+  manual_review: "Under review",
+  below_threshold: "Not included (under the minimum)",
+};
+
+const REASON_LABEL: Record<string, string> = {
+  "wallet activity predates initial window": "Last activity more than six months before the cutoff",
+  "no indexed wallet activity": "No Harmony activity found before the cutoff",
+  "prior reviewed non-issuance consumes allocation": "The full amount was already handled by an earlier policy decision",
+  "reviewed contract allocation retained in 2050 premint reserve": "Reviewed smart contract; amount kept in the 2050 reserve",
+  "reviewed contract allocation reserved for next stage": "Reviewed smart contract; handled in a later stage",
+};
+
+function reasonLabel(reason: string): string {
+  if (REASON_LABEL[reason]) return REASON_LABEL[reason];
+  if (/^wallet activity within \d+ months$/.test(reason)) return "Activity within six months before the cutoff";
+  return reason.charAt(0).toUpperCase() + reason.slice(1);
+}
+
 function Migration({ claim }: { claim: ClaimResponse }) {
   const policy = claim.migration_policy;
   if (!policy) return null;
-  const stage = policy.issuance_treatment === "not_issued"
-    ? "not issued"
-    : (policy.stage ?? "not assigned").replace(/_/g, " ");
+  const stage = policy.stage ? STAGE_LABEL[policy.stage] ?? policy.stage.replace(/_/g, " ") : "Not assigned";
   return (
     <div className="block">
       <h3>Migration policy</h3>
       <dl className="addr">
-        <dt>Snapshot threshold</dt>
-        <dd>{policy.snapshot_qualified ? "Qualified" : "Below threshold"}</dd>
-        <dt>Migration stage</dt>
+        <dt>Balance requirement</dt>
+        <dd>{policy.snapshot_qualified ? "Met" : "Not met"}</dd>
+        <dt>Initial airdrop</dt>
         <dd>{stage}</dd>
-        <dt>Issuance treatment</dt>
-        <dd>{policy.issuance_treatment.replace(/_/g, " ")}</dd>
+        {policy.issuance_treatment === "not_issued" && (
+          <>
+            <dt>Tokens</dt>
+            <dd>Not issued; kept in the 2050 reserve</dd>
+          </>
+        )}
         {policy.stage_reason && (
           <>
-            <dt>Stage reason</dt>
-            <dd>{policy.stage_reason}</dd>
+            <dt>Reason</dt>
+            <dd>{reasonLabel(policy.stage_reason)}</dd>
           </>
         )}
       </dl>
@@ -290,6 +314,12 @@ export function ClaimView({ claim }: { claim: ClaimResponse }) {
   return (
     <div className="claim">
       <Banner claim={claim} />
+      {claimCanRequestConfirmation(claim) && (
+        <div className="confirm-cta">
+          <a className="button" href="/confirm">Confirm you are still active</a>
+          <p className="small muted">Confirming shows this wallet is still in use, so it is not treated as dead.</p>
+        </div>
+      )}
       <AddressBlock claim={claim} />
       {claim.found && claim.eligibility && (
         <div className="summary">
@@ -298,11 +328,11 @@ export function ClaimView({ claim }: { claim: ClaimResponse }) {
             <span className="big">{one(claim.migration_policy?.total_allocation_atto ?? claim.eligibility.total_claim_atto)} ONE</span>
           </div>
           <div>
-            <span className="label">Initial-stage wallet allocation</span>
+            <span className="label">Wallet amount in the initial airdrop</span>
             <span className="big">{one(claim.wallet_airdrop?.initial_stage_atto)} ONE</span>
           </div>
           <div>
-            <span className="label">Initial-stage vault shares</span>
+            <span className="label">Vault shares in the initial airdrop</span>
             <span className="big">{one(claim.migration_policy?.stage === "initial" ? claim.migration_policy.staked_to_vault_atto : "0")} ONE</span>
           </div>
         </div>
@@ -312,11 +342,6 @@ export function ClaimView({ claim }: { claim: ClaimResponse }) {
       <Vaults positions={claim.vault_positions} />
       <Exchanges claim={claim} />
       <Adjustments adjustments={claim.adjustments} />
-      {claimCanRequestConfirmation(claim) && (
-        <p>
-          <a href="/confirm">Confirm ownership for the next batch</a>
-        </p>
-      )}
       {claim.notes.length > 0 && (
         <div className="block">
           <h3>Notes</h3>
@@ -331,8 +356,7 @@ export function ClaimView({ claim }: { claim: ClaimResponse }) {
         <p className="small muted">
           Last activity before cutoff: {formatUtc(claim.last_activity.time_utc)}
           {claim.last_activity.block ? `, block ${claim.last_activity.block.toLocaleString()}` : ""}
-          {claim.last_activity.shard !== null ? ` on shard ${claim.last_activity.shard}` : ""}
-          . This contextual indexed activity selects the initial wallet stage; it is not proof of current control or abandonment and does not change snapshot qualification.
+          {claim.last_activity.shard !== null ? ` on shard ${claim.last_activity.shard}` : ""}.
         </p>
       )}
     </div>

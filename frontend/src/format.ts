@@ -21,3 +21,11 @@ export function formatUtc(iso: string | null | undefined): string {
   if (Number.isNaN(d.getTime())) return iso;
   return d.toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC");
 }
+
+/** Calendar date only, e.g. "10 September 2026", in UTC. */
+export function formatDate(iso: string | null | undefined): string {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
+}
