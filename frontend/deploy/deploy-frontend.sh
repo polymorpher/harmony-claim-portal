@@ -26,7 +26,22 @@ cp frontend/dist/index.html frontend/dist/confirm/index.html
 
 log "syncing frontend/dist -> $bucket"
 gc storage rsync frontend/dist "$bucket" --recursive --delete-unmatched-destination-objects
-gc storage cp frontend/dist/index.html "$bucket/confirm" --content-type="text/html" --cache-control="no-cache"
+# A destination of gs://bucket/confirm is treated as the confirm/ prefix once
+# confirm/index.html exists, so the object name has to be set explicitly.
+token="$(gcloud auth print-access-token)"
+curl -fsS -X POST \
+  -H "Authorization: Bearer ${token}" \
+  -H "Content-Type: text/html" \
+  -H "Cache-Control: no-cache" \
+  --data-binary @frontend/dist/index.html \
+  "https://storage.googleapis.com/upload/storage/v1/b/${FRONTEND_BUCKET}/o?uploadType=media&name=confirm" \
+  >/dev/null
+curl -fsS -X PATCH \
+  -H "Authorization: Bearer ${token}" \
+  -H "Content-Type: application/json" \
+  --data '{"cacheControl":"no-cache","contentType":"text/html"}' \
+  "https://storage.googleapis.com/storage/v1/b/${FRONTEND_BUCKET}/o/confirm" \
+  >/dev/null
 
 log "setting cache-control"
 # hashed assets are immutable; html must always be revalidated
@@ -34,8 +49,6 @@ gc storage objects update "$bucket/assets/**" \
   --cache-control="public,max-age=31536000,immutable" >/dev/null || true
 gc storage objects update "$bucket/index.html" \
   --cache-control="no-cache" >/dev/null
-gc storage objects update "$bucket/confirm" \
-  --content-type="text/html" --cache-control="no-cache" >/dev/null
 gc storage objects update "$bucket/confirm/index.html" \
   --content-type="text/html" --cache-control="no-cache" >/dev/null
 
