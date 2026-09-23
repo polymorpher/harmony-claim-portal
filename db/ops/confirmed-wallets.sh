@@ -6,10 +6,11 @@
 #   db/ops/confirmed-wallets.sh --compact  # one line per confirmation
 #
 # The default needs only .env (GCP_PROJECT, GCP_ZONE, VM_NAME, DB_TUNNEL_PORT)
-# and gcloud. It opens an IAP SSH tunnel to the VM's PostgreSQL, reads the
-# owner database URL from the VM (a root-only file there), runs the report,
-# and closes the tunnel. If something already listens on DB_TUNNEL_PORT, for
-# example backend/deploy/tunnel-db.sh, that tunnel is used and left open.
+# and a logged-in gcloud. One IAP SSH session forwards the VM's PostgreSQL to
+# localhost and reads the owner database URL from the VM (a root-only file
+# there); the report runs, then the session is closed. If something already
+# listens on DB_TUNNEL_PORT, for example backend/deploy/tunnel-db.sh, that
+# tunnel is used and left open.
 #
 # Without the tunnel (local database, or running on the VM itself):
 #   db/ops/confirmed-wallets.sh --no-tunnel --db-url postgres://claimapi:PASSWORD@127.0.0.1:5434/claims
@@ -43,7 +44,7 @@ while [ "$#" -gt 0 ]; do
     --out-dir) out_dir="$2"; shift 2 ;;
     --no-tunnel) use_tunnel=0; shift ;;
     --db-url|--dsn) db_url="$2"; use_tunnel=0; shift 2 ;;
-    -h|--help) sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument: $1 (options: --csv, --compact, --out-dir DIR, --no-tunnel, --db-url URL)" ;;
   esac
 done
@@ -53,13 +54,39 @@ require_tools psql python3
 work="$(mktemp -d)"
 tunnel_pid=""
 
+# All descendants of a pid, deepest first (gcloud runs ssh as a child).
+descendants() {
+  local child
+  while read -r child; do
+    [ -n "$child" ] || continue
+    descendants "$child"
+    echo "$child"
+  done <<<"$(pgrep -P "$1" 2>/dev/null || true)"
+}
+
+any_alive() {
+  local pid
+  for pid in "$@"; do
+    if kill -0 "$pid" 2>/dev/null; then return 0; fi
+  done
+  return 1
+}
+
 stop_tunnel() {
   [ -n "$tunnel_pid" ] || return 0
-  if kill -0 "$tunnel_pid" 2>/dev/null; then
-    # gcloud runs ssh as a child; end both so the forwarded port is released.
-    pkill -TERM -P "$tunnel_pid" 2>/dev/null || true
-    kill -TERM "$tunnel_pid" 2>/dev/null || true
-    wait "$tunnel_pid" 2>/dev/null || true
+  local pids=() pid tries=0
+  while read -r pid; do
+    [ -n "$pid" ] && pids+=("$pid")
+  done <<<"$(descendants "$tunnel_pid")"
+  pids+=("$tunnel_pid")
+  kill -TERM "${pids[@]}" 2>/dev/null || true
+  wait "$tunnel_pid" 2>/dev/null || true
+  while any_alive "${pids[@]}" && [ "$tries" -lt 10 ]; do
+    sleep 0.3
+    tries=$((tries + 1))
+  done
+  if any_alive "${pids[@]}"; then
+    kill -KILL "${pids[@]}" 2>/dev/null || true
   fi
   tunnel_pid=""
 }
@@ -83,33 +110,74 @@ sys.exit(0)
 PY
 }
 
+log_tail() { tail -n 5 "$1" 2>/dev/null | tr '\n' ' '; }
+
+# gcloud registers the local SSH key with OS Login on first use. Two sessions
+# doing that at once fail with "importSshPublicKey ... Multiple concurrent
+# mutations"; the second attempt then finds the key already registered.
+ssh_key_race() { grep -qiE 'concurrent mutations|importSshPublicKey' "$1" 2>/dev/null; }
+
 if [ "$use_tunnel" -eq 1 ]; then
   set_defaults
   require_vars GCP_PROJECT GCP_ZONE VM_NAME DB_TUNNEL_PORT DB_NAME
   require_tools gcloud
 
+  # The owner URL lives in a root-only file on the VM.
+  read_url='if [ -f /etc/harmony-claim-migrate.env ]; then sudo grep -E "^DATABASE_URL=" /etc/harmony-claim-migrate.env; else sudo grep -E "^DATABASE_URL=" '"$APP_ENV_FILE"'; fi | cut -d= -f2- | tr -d "\""'
+  ready_marker="HCP_TUNNEL_READY"
+  raw_url=""
+
   if port_open "$DB_TUNNEL_PORT"; then
     log "using the tunnel already open on localhost:$DB_TUNNEL_PORT"
+    log "reading the database URL from $VM_NAME"
+    for attempt in 1 2 3; do
+      if raw_url="$(vm_ssh "$read_url" 2>"$work/ssh.log" </dev/null)" && [ -n "$raw_url" ]; then break; fi
+      raw_url=""
+      if [ "$attempt" -lt 3 ] && ssh_key_race "$work/ssh.log"; then
+        warn "SSH key registration raced with another gcloud session; retrying ($attempt/3)"
+        sleep 3
+        continue
+      fi
+      die "could not read the database URL from $VM_NAME: $(log_tail "$work/ssh.log")"
+    done
   else
-    log "opening tunnel to $VM_NAME (localhost:$DB_TUNNEL_PORT -> PostgreSQL)"
-    "$root/backend/deploy/tunnel-db.sh" >"$work/tunnel.log" 2>&1 &
-    tunnel_pid=$!
-  fi
-
-  log "reading the database URL from $VM_NAME"
-  if ! db_url="$("$root/backend/deploy/tunnel-db.sh" --print-dsn 2>"$work/print-dsn.log")" || [ -z "$db_url" ]; then
-    die "could not read the database URL from $VM_NAME: $(tail -n 3 "$work/print-dsn.log" 2>/dev/null | tr '\n' ' ')"
-  fi
-
-  if [ -n "$tunnel_pid" ]; then
-    waited=0
-    until port_open "$DB_TUNNEL_PORT"; do
-      kill -0 "$tunnel_pid" 2>/dev/null || die "tunnel exited: $(tail -n 5 "$work/tunnel.log" | tr '\n' ' ')"
-      [ "$waited" -lt 60 ] || die "tunnel did not come up in 60 s: $(tail -n 5 "$work/tunnel.log" | tr '\n' ' ')"
-      sleep 1
-      waited=$((waited + 1))
+    log "opening tunnel to $VM_NAME (localhost:$DB_TUNNEL_PORT -> PostgreSQL) and reading the database URL"
+    # One SSH session forwards the port and prints the URL, then idles to
+    # keep the forward open until stop_tunnel ends it.
+    for attempt in 1 2 3; do
+      : >"$work/tunnel.out"
+      : >"$work/tunnel.log"
+      gcloud --project "$GCP_PROJECT" --quiet compute ssh "$VM_NAME" --zone "$GCP_ZONE" --tunnel-through-iap \
+        --command "$read_url; echo $ready_marker; exec sleep 86400" \
+        -- -L "${DB_TUNNEL_PORT}:127.0.0.1:5432" -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
+        >"$work/tunnel.out" 2>"$work/tunnel.log" </dev/null &
+      tunnel_pid=$!
+      waited=0
+      until grep -q "^$ready_marker" "$work/tunnel.out" 2>/dev/null; do
+        kill -0 "$tunnel_pid" 2>/dev/null || break
+        [ "$waited" -lt 60 ] || die "tunnel did not come up in 60 s: $(log_tail "$work/tunnel.log")"
+        sleep 1
+        waited=$((waited + 1))
+      done
+      if grep -q "^$ready_marker" "$work/tunnel.out" 2>/dev/null; then
+        raw_url="$(grep -v "^$ready_marker" "$work/tunnel.out" | grep -m1 . | tr -d '[:space:]')"
+        break
+      fi
+      wait "$tunnel_pid" 2>/dev/null || true
+      tunnel_pid=""
+      if [ "$attempt" -lt 3 ] && ssh_key_race "$work/tunnel.log"; then
+        warn "SSH key registration raced with another gcloud session; retrying ($attempt/3)"
+        sleep 3
+        continue
+      fi
+      die "tunnel to $VM_NAME failed: $(log_tail "$work/tunnel.log")"
     done
   fi
+
+  [ -n "$raw_url" ] || die "the VM returned no database URL (expected DATABASE_URL in /etc/harmony-claim-migrate.env)"
+  # Point the URL at the local end of the tunnel.
+  db_url="$(printf '%s' "$raw_url" | sed -E "s#@[^/]+/#@localhost:${DB_TUNNEL_PORT}/#")"
+  port_open "$DB_TUNNEL_PORT" || die "nothing is listening on localhost:$DB_TUNNEL_PORT: $(log_tail "$work/tunnel.log")"
   source_label="$VM_NAME PostgreSQL via IAP tunnel (localhost:$DB_TUNNEL_PORT)"
 else
   db_url="${db_url:-${CONFIRM_OWNER_URL:-${DATABASE_URL:-}}}"
