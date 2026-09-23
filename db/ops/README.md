@@ -98,6 +98,48 @@ psql postgres://claimapi@127.0.0.1:5434/claims -f db/ops/fixture-candidates.sql
 Use the owner URL from `backend/.env.owner`. Do not load the fixture into the
 public database.
 
+## Who has confirmed
+
+```sh
+db/ops/confirmed-wallets.sh                    # tunnel to the VM, print the report, close the tunnel
+db/ops/confirmed-wallets.sh --csv              # also writes data/confirmed-wallets/confirmed-wallets-<UTC timestamp>.csv
+db/ops/confirmed-wallets.sh --compact          # one line per confirmation
+```
+
+The default needs only `.env` and `gcloud`. It opens the IAP tunnel to the
+VM's PostgreSQL, reads the owner database URL from the VM, runs the report,
+and closes the tunnel. If `backend/deploy/tunnel-db.sh` is already running,
+that tunnel is used and left open. For a local database, or on the VM itself,
+skip the tunnel:
+
+```sh
+db/ops/confirmed-wallets.sh --no-tunnel --db-url "$(grep '^DATABASE_URL=' backend/.env.owner | cut -d= -f2-)"
+db/ops/confirmed-wallets.sh --no-tunnel        # uses CONFIRM_OWNER_URL or DATABASE_URL from .env
+```
+
+Prints every recorded signature with the wallet's amounts: the total not in
+the initial airdrop, split into the wallet part and vault shares; the balance
+components behind it (liquid per shard, pending undelegation, unclaimed
+reward, cross-shard, WONE); the vault shares per validator; last activity;
+signer; and the full signature. The header carries the report time (UTC and
+local), the database host without its password, and the loaded ledger and
+candidate versions. The summary counts by reason, category, version and
+review status, flags wallets that signed under a superseded candidate set or
+whose signer differs from the address, and gives the confirmed allocation as a
+share of the candidate set.
+
+`--csv` writes two files with the report timestamp in their names: one row per
+confirmation with atto and ONE amounts, the per-validator breakdown in a
+`vault_shares_breakdown` column, the signature and the signed message; and a
+companion `-vault-shares.csv` with one row per wallet and validator. The
+output prints the SHA-256 of the main file. `--out-dir` changes the directory.
+
+Amounts come from the loaded ledger, so they reflect the current
+`snapshot_meta.data_version`, not the version the wallet signed under; the
+`still_candidate` column says whether the two agree. The report runs as the
+owner role because it reads schema `confirm` and the public ledger in one
+pass, which neither runtime role can do. The database URL is never printed.
+
 ## Export, review, backup
 
 ```sh

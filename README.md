@@ -18,7 +18,7 @@ infra/gcp/30-setup-load-balancer.sh     global HTTPS LB, /api/* -> VM, Certifica
 infra/cloudflare/{lib,setup-dns}.sh     proxied A records, _acme-challenge CNAMEs, strict SSL, HTTPS-only
 db/migrations/001_schema.sql   schema (amounts NUMERIC(78,0) in atto-ONE)
 db/migrations/005_confirm_schema.sql   confirmation candidates and append-only signatures
-db/ops/                        role split, candidate load, export, review, backup (see db/ops/README.md)
+db/ops/                        role split, candidate load, confirmed-wallets report, export, review, backup (see db/ops/README.md)
 db/seed/reason_texts.json      reason_code -> user-facing title/text (+ apply-reason-texts.sh)
 injector/                      Python loader: harmony-migration CSVs -> Postgres (COPY + atomic swap)
 backend/                       lookup API, confirmation API, and the proxy in front of them
