@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance } from "fastify";
+import { isSignatureScheme } from "@hcp/shared";
 import { normalizeAddress } from "../address.js";
 import type { ConfirmConfig } from "../config.js";
 import { registerApiSafety, registerNotFound } from "../http.js";
@@ -53,6 +54,7 @@ export async function buildConfirmApp(opts: ConfirmAppOptions): Promise<FastifyI
       signature?: unknown;
       data_version?: unknown;
       policy_version?: unknown;
+      signature_scheme?: unknown;
     };
   }>(
     "/api/v1/confirmations",
@@ -64,11 +66,17 @@ export async function buildConfirmApp(opts: ConfirmAppOptions): Promise<FastifyI
         (err as { statusCode?: number }).statusCode = 400;
         throw err;
       }
+      const scheme = body.signature_scheme ?? "personal_sign";
+      if (!isSignatureScheme(scheme)) {
+        const err = new Error("signature_scheme must be personal_sign or harmony_ledger_tx");
+        (err as { statusCode?: number }).statusCode = 400;
+        throw err;
+      }
       const signedVersion =
         typeof body.data_version === "string" && typeof body.policy_version === "string"
           ? { dataVersion: body.data_version, policyVersion: body.policy_version }
           : undefined;
-      return service.submit(address, body.nonce, body.issued_at, body.signature, signedVersion);
+      return service.submit(address, body.nonce, body.issued_at, body.signature, signedVersion, scheme);
     },
   );
 

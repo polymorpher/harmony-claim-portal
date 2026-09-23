@@ -1,4 +1,5 @@
 import pg from "pg";
+import type { SignatureScheme } from "@hcp/shared";
 import { assertPrivileges } from "../privileges.js";
 
 export interface CandidateRow {
@@ -17,8 +18,20 @@ export interface ConfirmationRow {
   stage_reason: string;
   message: string;
   signature: string;
+  signature_scheme: SignatureScheme;
   signer: string;
   created_at: string;
+}
+
+export interface ConfirmationInsert {
+  address: string;
+  dataVersion: string;
+  policyVersion: string;
+  stageReason: string;
+  message: string;
+  signature: string;
+  signatureScheme: SignatureScheme;
+  signer: string;
 }
 
 export type InsertResult =
@@ -30,15 +43,7 @@ export interface ConfirmStore {
   checkPrivileges(): Promise<void>;
   findCandidate(address: string): Promise<CandidateRow | null>;
   findConfirmation(address: string, dataVersion: string, policyVersion: string): Promise<ConfirmationRow | null>;
-  insertConfirmation(input: {
-    address: string;
-    dataVersion: string;
-    policyVersion: string;
-    stageReason: string;
-    message: string;
-    signature: string;
-    signer: string;
-  }): Promise<InsertResult>;
+  insertConfirmation(input: ConfirmationInsert): Promise<InsertResult>;
   close(): Promise<void>;
 }
 
@@ -84,7 +89,8 @@ export class PgConfirmStore implements ConfirmStore {
 
   async findConfirmation(address: string, dataVersion: string, policyVersion: string): Promise<ConfirmationRow | null> {
     const res = await this.pool.query<ConfirmationRow>(
-      `SELECT address, data_version, policy_version, stage_reason, message, signature, signer, created_at
+      `SELECT address, data_version, policy_version, stage_reason, message, signature,
+              signature_scheme, signer, created_at
          FROM confirm.confirmations
         WHERE address = $1 AND data_version = $2 AND policy_version = $3`,
       [address, dataVersion, policyVersion],
@@ -94,15 +100,7 @@ export class PgConfirmStore implements ConfirmStore {
     return { ...row, address: trim(row.address), signer: trim(row.signer), created_at: iso(row.created_at) };
   }
 
-  async insertConfirmation(input: {
-    address: string;
-    dataVersion: string;
-    policyVersion: string;
-    stageReason: string;
-    message: string;
-    signature: string;
-    signer: string;
-  }): Promise<InsertResult> {
+  async insertConfirmation(input: ConfirmationInsert): Promise<InsertResult> {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -124,8 +122,8 @@ export class PgConfirmStore implements ConfirmStore {
       }
       const inserted = await client.query<{ created_at: Date }>(
         `INSERT INTO confirm.confirmations
-           (address, data_version, policy_version, stage_reason, message, signature, signer)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+           (address, data_version, policy_version, stage_reason, message, signature, signature_scheme, signer)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (address, data_version, policy_version) DO NOTHING
          RETURNING created_at`,
         [
@@ -135,6 +133,7 @@ export class PgConfirmStore implements ConfirmStore {
           input.stageReason,
           input.message,
           input.signature,
+          input.signatureScheme,
           input.signer,
         ],
       );

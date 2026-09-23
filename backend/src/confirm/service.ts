@@ -1,9 +1,11 @@
 import { randomBytes } from "node:crypto";
-import { getAddress, verifyMessage } from "viem";
-import type {
-  ConfirmationChallenge,
-  ConfirmationReceipt,
-  ConfirmationStatus,
+import { getAddress, keccak256, recoverAddress, verifyMessage, type Address, type Hex } from "viem";
+import {
+  harmonyLedgerTx,
+  type ConfirmationChallenge,
+  type ConfirmationReceipt,
+  type ConfirmationStatus,
+  type SignatureScheme,
 } from "@hcp/shared";
 import { addressForms } from "../address.js";
 import { confirmationMessage } from "./message.js";
@@ -35,6 +37,21 @@ export interface ConfirmServiceOptions {
 
 function sameSignature(a: string, b: string): boolean {
   return a.toLowerCase() === b.toLowerCase();
+}
+
+export async function signatureMatches(
+  scheme: SignatureScheme,
+  address: Address,
+  message: string,
+  signature: Hex,
+): Promise<boolean> {
+  try {
+    if (scheme === "personal_sign") return await verifyMessage({ address, message, signature });
+    const signer = await recoverAddress({ hash: keccak256(harmonyLedgerTx(address, message)), signature });
+    return signer.toLowerCase() === address.toLowerCase();
+  } catch {
+    return false;
+  }
 }
 
 export class ConfirmService {
@@ -103,6 +120,7 @@ export class ConfirmService {
     issuedAt: string,
     signature: string,
     signedVersion?: { dataVersion: string; policyVersion: string },
+    scheme: SignatureScheme = "personal_sign",
   ): Promise<ConfirmationReceipt> {
     if (!NONCE.test(nonce) || !ISSUED.test(issuedAt)) throw new ConfirmError(400, BAD_REQUEST);
     if (!SIGNATURE.test(signature)) throw new ConfirmError(400, BAD_REQUEST);
@@ -125,13 +143,9 @@ export class ConfirmService {
     if (existing) return this.replay(address, existing, signature);
 
     const message = this.messageFor(candidate, getAddress(address), issuedAt, nonce);
-    let valid = false;
-    try {
-      valid = await verifyMessage({ address: getAddress(address), message, signature: signature as `0x${string}` });
-    } catch {
-      valid = false;
+    if (!(await signatureMatches(scheme, getAddress(address), message, signature as Hex))) {
+      throw new ConfirmError(400, "The signature does not match this wallet and message.");
     }
-    if (!valid) throw new ConfirmError(400, "The signature does not match this wallet and message.");
 
     const result = await this.store.insertConfirmation({
       address,
@@ -140,6 +154,7 @@ export class ConfirmService {
       stageReason: candidate.stage_reason,
       message,
       signature,
+      signatureScheme: scheme,
       signer: address,
     });
     if (result.ok) {
