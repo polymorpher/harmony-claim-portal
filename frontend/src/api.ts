@@ -5,6 +5,7 @@ import type {
   ConfirmationReceipt,
   ConfirmationStatus,
   MetaResponse,
+  SignatureScheme,
 } from "@hcp/shared";
 
 const BASE = "/api";
@@ -59,6 +60,7 @@ export const submitConfirmation = (
   signature: string,
   dataVersion: string,
   policyVersion: string,
+  signatureScheme: SignatureScheme,
 ) =>
   postJson<ConfirmationReceipt>("/v1/confirmations", {
     address,
@@ -67,4 +69,5 @@ export const submitConfirmation = (
     signature,
     data_version: dataVersion,
     policy_version: policyVersion,
+    signature_scheme: signatureScheme,
   });

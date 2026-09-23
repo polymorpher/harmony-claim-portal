@@ -4,6 +4,8 @@ import { useAccount, useConnect, useDisconnect } from "wagmi";
 import { ApiRequestError, fetchClaim, fetchMeta } from "./api";
 import { ClaimView } from "./ClaimView";
 import { formatUtc, looksLikeAddress, one, shortAddress } from "./format";
+import { connectErrorText, isConnecting } from "./wallet";
+import { walletConnectConnector } from "./wagmi";
 
 function addressFromUrl(): string {
   if (typeof window === "undefined") return "";
@@ -19,8 +21,9 @@ function setAddressInUrl(address: string) {
 
 export function App() {
   const { address: connected, isConnected } = useAccount();
-  const { connectors, connect, isPending: connecting, error: connectError } = useConnect();
+  const { connectors, connect, isPending: connecting, variables: connectVariables, error: connectError } = useConnect();
   const { disconnect } = useDisconnect();
+  const connectErrorMessage = connectErrorText(connectError);
 
   const [input, setInput] = useState(addressFromUrl);
   const [lookup, setLookup] = useState<string>(addressFromUrl);
@@ -60,7 +63,7 @@ export function App() {
     () => connectors.filter((c) => c.type === "injected" || c.id === "injected"),
     [connectors],
   );
-  const wcConnector = connectors.find((c) => c.type === "walletConnect");
+  const wcConnector = walletConnectConnector;
 
   const errorText = (() => {
     const err = claim.error;
@@ -119,7 +122,9 @@ export function App() {
                     disabled={connecting}
                     onClick={() => connect({ connector: c })}
                   >
-                    {connecting ? "Connecting…" : `Connect ${c.name === "Injected" ? "browser wallet" : c.name}`}
+                    {isConnecting(connecting, connectVariables, c)
+                      ? "Connecting…"
+                      : `Connect ${c.name === "Injected" ? "browser wallet" : c.name}`}
                   </button>
                 ))
               ) : (
@@ -133,7 +138,7 @@ export function App() {
             </>
           )}
         </div>
-        {connectError && <p className="error">{connectError.message}</p>}
+        {connectErrorMessage && <p className="error">{connectErrorMessage}</p>}
 
         <form className="lookup" onSubmit={onSubmit}>
           <label htmlFor="address">or paste an address (0x… or one1…)</label>

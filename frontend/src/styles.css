@@ -62,6 +62,17 @@ button:disabled { opacity: 0.6; cursor: default; }
 button.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
 
 .connect-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+.connect-help { margin: 0 0 12px; padding-left: 18px; color: var(--muted); font-size: 0.9rem; }
+.connect-help li { margin-bottom: 6px; }
+.connect-help strong { color: var(--text); font-weight: 600; }
+.ledger-accounts { display: flex; flex-direction: column; gap: 12px; margin-bottom: 14px; }
+.ledger-accounts label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 0.9rem; }
+.ledger-note { margin-top: 14px; }
+.ledger-note code { color: var(--text); }
+select {
+  max-width: 100%; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: #0c1117; color: var(--text); font-family: ui-monospace, Menlo, monospace; font-size: 0.9rem;
+}
 .pill { padding: 6px 12px; border-radius: 999px; font-size: 0.9rem; border: 1px solid var(--border); }
 .pill.ok { border-color: var(--ok); }
 
