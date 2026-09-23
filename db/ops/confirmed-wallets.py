@@ -81,6 +81,7 @@ CSV_COLUMNS = [
     "review_batch_id",
     "reviewed_at_utc",
     "signature",
+    "signature_scheme",
     "message",
 ]
 
@@ -253,6 +254,7 @@ class Confirmation:
         self.policy_version = (row.get("policy_version") or "").strip()
         self.stage_reason = (row.get("stage_reason") or "").strip()
         self.signature = (row.get("signature") or "").strip()
+        self.signature_scheme = (row.get("signature_scheme") or "").strip() or "personal_sign"
         self.message = row.get("message") or ""
         self.still_candidate = pg_bool(row.get("still_candidate"))
         self.in_ledger = pg_bool(row.get("in_ledger")) or False
@@ -339,6 +341,7 @@ class Confirmation:
             "review_batch_id": self.review_batch_id,
             "reviewed_at_utc": self.reviewed_at,
             "signature": self.signature,
+            "signature_scheme": self.signature_scheme,
             "message": self.message,
         }
 
@@ -502,6 +505,7 @@ def render_record(index: int, c: Confirmation) -> List[str]:
     signer_note = "matches address" if c.signer_matches else "DOES NOT MATCH ADDRESS"
     lines.append(f"{pad}signer        {c.signer or '-'} ({signer_note})")
     lines.append(f"{pad}signature     {c.signature}")
+    lines.append(f"{pad}signed with   {c.signature_scheme}")
     return lines
 
 

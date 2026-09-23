@@ -32,6 +32,7 @@ def confirmation(**kwargs):
         "policy_version": "migration-policy-20260917",
         "stage_reason": mod.PREDATES,
         "signature": SIG,
+        "signature_scheme": "personal_sign",
         "message": "line one\nline two",
         "still_candidate": "t",
         "in_ledger": "t",
@@ -213,7 +214,10 @@ class EndToEndTests(unittest.TestCase):
         vaults = Path(tmp) / "vaults.csv"
         exc = Path(tmp) / "exceptions.csv"
         cand = Path(tmp) / "candidates.csv"
-        write(conf, [confirmation(), confirmation(id="2", address=BOB, signer=BOB)])
+        write(conf, [
+            confirmation(),
+            confirmation(id="2", address=BOB, signer=BOB, signature_scheme="harmony_ledger_tx"),
+        ])
         write(vaults, [vault()])
         write(exc, [])
         write(cand, [candidates()])
@@ -243,6 +247,8 @@ class EndToEndTests(unittest.TestCase):
         self.assertIn(f"#1   {ALICE}", text)
         self.assertIn("1,500 ONE not in initial airdrop  =  wallet 1,000  +  vault shares 500", text)
         self.assertIn(f"signature     {SIG}", text)
+        self.assertIn("signed with   personal_sign", text)
+        self.assertIn("signed with   harmony_ledger_tx", text)
         self.assertIn("Validator One", text)
         self.assertIn("confirmations           2 from 2 wallets", text)
         self.assertFalse(out_dir.exists())
@@ -258,6 +264,8 @@ class EndToEndTests(unittest.TestCase):
                 rows = list(csv.DictReader(handle))
             self.assertEqual(len(rows), 2)
             self.assertEqual(rows[0]["signature"], SIG)
+            self.assertEqual(rows[0]["signature_scheme"], "personal_sign")
+            self.assertEqual(rows[1]["signature_scheme"], "harmony_ledger_tx")
             self.assertEqual(rows[0]["message"], "line one\nline two")
             self.assertEqual(rows[0]["vault_shares_breakdown"], f"{VAL1}=300")
             with vaults.open(newline="") as handle:

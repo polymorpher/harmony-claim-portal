@@ -204,6 +204,7 @@ COPY (
     c.policy_version,
     c.stage_reason,
     c.signature,
+    c.signature_scheme,
     c.message,
     (cand.address IS NOT NULL)                                              AS still_candidate,
     (a.address IS NOT NULL)                                                 AS in_ledger,
