@@ -152,6 +152,27 @@ db/ops/backup-confirm.sh --dsn "$CONFIRM_OWNER_URL"
 `record-review.sh --confirmation-id` uses. The export manifest is the SHA-256
 of that CSV. Recover each signature before using the file.
 
+## Verifying a signature
+
+Every row has `signature_scheme`. Rows from before migration 006 are
+`personal_sign`. The signature is 65 bytes, `r || s || v` with `v` 27 or 28.
+The signed text is the `message` column exactly, UTF-8.
+
+- `personal_sign`: EIP-191. Recover from
+  `keccak256("\x19Ethereum Signed Message:\n" + len(message) + message)`.
+  Browser and phone wallets, Ledger Wallet over WalletConnect, and the 2025
+  Harmony and Ethereum Ledger apps over USB use this.
+- `harmony_ledger_tx`: the pre-2025 Harmony Ledger app, which only signs
+  transactions. Recover from `keccak256(payload)`, where `payload` is
+  `rlp([0, 0, 0, 0, 0, address, 0, message, 1, 0, 0])`: nonce, gas price,
+  gas limit, shard, to shard, recipient (the confirming address itself),
+  amount, data, then chain id 1 and the two EIP-155 zeros. Integers are
+  minimal big-endian, so each 0 is the empty string. This equals Harmony's
+  `types.NewEIP155Signer(big.NewInt(1)).Hash(tx)` for that transaction. It
+  can never be included in a block: a gas limit of 0 is below intrinsic gas.
+
+In both cases the recovered address must equal `address`.
+
 Deploy enables `harmony-claim-backup.timer`, which runs `backup-confirm.sh`
 daily, keeps 14 dumps under `/var/lib/harmony-claim-api/backups`, and uploads
 when `CONFIRM_BACKUP_BUCKET` is set in the migrate env.

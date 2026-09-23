@@ -18,6 +18,7 @@ infra/gcp/30-setup-load-balancer.sh     global HTTPS LB, /api/* -> VM, Certifica
 infra/cloudflare/{lib,setup-dns}.sh     proxied A records, _acme-challenge CNAMEs, strict SSL, HTTPS-only
 db/migrations/001_schema.sql   schema (amounts NUMERIC(78,0) in atto-ONE)
 db/migrations/005_confirm_schema.sql   confirmation candidates and append-only signatures
+db/migrations/006_confirm_signature_scheme.sql   records how each confirmation was signed
 db/ops/                        role split, candidate load, confirmed-wallets report, export, review, backup (see db/ops/README.md)
 db/seed/reason_texts.json      reason_code -> user-facing title/text (+ apply-reason-texts.sh)
 injector/                      Python loader: harmony-migration CSVs -> Postgres (COPY + atomic swap)
@@ -53,16 +54,25 @@ The confirmation process uses the same rule with its own lower per-browser cap.
 
 `/confirm` is the only page that asks for a signature. It is for key-controlled
 wallets deferred because their last indexed activity is outside the six-month
-window, or because no activity was indexed. The signature is `personal_sign`.
-It records current control for a later batch. It does not change the cutoff
-ledger, and a stored row is not itself authorization: the export has to be
-recovered and checked before a wallet is promoted.
+window, or because no activity was indexed. It records current control for a
+later batch. It does not change the cutoff ledger, and a stored row is not
+itself authorization: the export has to be recovered and checked before a
+wallet is promoted.
+
+Ways to sign:
+
+- Browser wallet (MetaMask and other extensions, including MetaMask with a Ledger): `personal_sign`.
+- WalletConnect: phone wallets and Ledger Wallet (formerly Ledger Live), `personal_sign`. Needs `VITE_WALLETCONNECT_PROJECT_ID`. Harmony (`eip155:1666600000`) is requested as an optional chain next to Ethereum mainnet. Ledger Wallet only holds Ethereum-app accounts (`44'/60'`).
+- Ledger over USB (WebHID, Chrome, Edge, or Brave on a computer), talking to the device directly:
+  - 2025 Harmony app (Ledger's Ethereum-app build for Harmony, `44'/1023'/0'/0/N`): `personal_sign`, shown on the device.
+  - Ethereum app (`44'/60'`, Ledger Wallet, MetaMask, and legacy MyEtherWallet paths): `personal_sign`.
+  - Pre-2025 Harmony app ("Harmony One", Nano S era, `44'/1023'/0'/0/0` only): this app cannot sign messages. It signs a Harmony transaction that sends 0 ONE from the address to itself with gas price 0 and gas limit 0, with the confirmation message as data. Harmony nodes reject any transaction below intrinsic gas, so it cannot be broadcast. Stored as `harmony_ledger_tx`; `shared/src/harmony-ledger-tx.ts` builds the signed bytes.
 
 Confirmation routes:
 
 - `GET /api/v1/confirmations/:address` - eligibility and whether a signature is already stored
 - `POST /api/v1/confirmations/challenges` - a random nonce and the exact message to sign; nothing is stored
-- `POST /api/v1/confirmations` - the signature, nonce, and issued time. The server rebuilds the message and checks it is still inside the time window
+- `POST /api/v1/confirmations` - the signature, nonce, issued time, and `signature_scheme` (`personal_sign`, the default, or `harmony_ledger_tx`). The server rebuilds the message, checks it is still inside the time window, and verifies the signature under that scheme
 
 The lookup process uses the `claim_read` role. The confirmation process uses
 `claim_confirm` and cannot write the claim tables. The owner role used by
@@ -98,6 +108,7 @@ psql "$(grep '^DATABASE_URL=' backend/.env.owner | cut -d= -f2-)" -v ON_ERROR_ST
 
 # checks
 pnpm --filter @hcp/backend test                                        # unit + http tests
+pnpm --filter @hcp/frontend test                                       # Ledger framing and signing against emulated apps
 pnpm test:ops                                                          # candidate selection
 TEST_DATABASE_URL="$(scripts/dev-postgres.sh url claims)" pnpm --filter @hcp/backend test   # + integration
 pnpm build                                                             # shared, backend, frontend
