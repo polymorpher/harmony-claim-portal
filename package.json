@@ -10,7 +10,7 @@
   "packageManager": "pnpm@12.4.2",
   "scripts": {
     "build": "pnpm -r --filter ./backend --filter ./frontend run build",
-    "test": "pnpm -r --filter ./backend run test",
+    "test": "pnpm -r --filter ./backend --filter ./frontend run test",
     "test:infra": "infra/test/gcloud-args-test.sh",
     "typecheck": "pnpm -r run typecheck",
     "test:ops": "python3 db/ops/test_load_candidates.py && python3 db/ops/test_confirmed_wallets.py",
