@@ -13,7 +13,7 @@
     "test": "pnpm -r --filter ./backend run test",
     "test:infra": "infra/test/gcloud-args-test.sh",
     "typecheck": "pnpm -r run typecheck",
-    "test:ops": "python3 db/ops/test_load_candidates.py",
+    "test:ops": "python3 db/ops/test_load_candidates.py && python3 db/ops/test_confirmed_wallets.py",
     "shellcheck": "shellcheck -x infra/*.sh infra/gcp/*.sh infra/gcp/vm/*.sh infra/cloudflare/*.sh infra/test/*.sh backend/deploy/*.sh frontend/deploy/*.sh scripts/*.sh db/seed/*.sh db/ops/*.sh"
   }
 }
