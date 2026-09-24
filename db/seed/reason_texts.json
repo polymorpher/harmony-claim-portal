@@ -47,9 +47,9 @@
     "title": "Next stage: 1wallet recovery multisig",
     "user_text": "This reviewed 1wallet allocation remains eligible for a later stage after its recovery-multisig destination is approved."
   },
-  "exchange_requested_aggregate_reroute": {
-    "title": "Handled by exchange",
-    "user_text": "This exchange-controlled wallet does not receive a direct same-address airdrop. Its entitlement is assigned to the exchange's approved aggregate destination, or remains on hold until that destination is approved."
+  "exchange_manual_reserve_delivery": {
+    "title": "Sent separately by exchange arrangement",
+    "user_text": "This exchange wallet is not part of the airdrop. As arranged with the exchange, this amount is sent separately from the 2050 reserve to the address the exchange confirmed."
   },
   "layerzero_nativeoft_reconciliation_hold": {
     "title": "Held: LayerZero NativeOFT reconciliation pending",
