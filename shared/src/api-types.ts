@@ -5,10 +5,18 @@
 
 export type AccountType = "ordinary_eoa" | "validator_account" | "contract" | "excluded";
 export type EligibilityStatus = "prioritized" | "deferred" | "next_stage" | "not_issuing" | "handled_by_exchange";
-export type MigrationStage = "initial" | "next_stage" | "deferred" | "manual_review" | "below_threshold" | null;
-export type IssuanceTreatment = "issue" | "not_issued";
-export type DestinationStatus = "ready" | "hold" | "not_issuing" | "redistributed" | "none";
-export type AdjustmentKind = "deduction" | "redistribution" | "hold" | "redirect" | "same_address";
+export type MigrationStage =
+  | "initial"
+  | "exchange_manual"
+  | "next_stage"
+  | "deferred"
+  | "manual_review"
+  | "below_threshold"
+  | null;
+/** `manual_from_reserve`: exchange wallets, delivered by hand from the 2050 reserve instead of the airdrop. */
+export type IssuanceTreatment = "issue" | "manual_from_reserve" | "not_issued";
+export type DestinationStatus = "ready" | "hold" | "exchange_manual" | "not_issuing" | "redistributed" | "none";
+export type AdjustmentKind = "deduction" | "redistribution" | "hold" | "redirect" | "same_address" | "manual_delivery";
 export type Component = "wallet_airdrop" | "vault_shares";
 export type DispositionCode =
   | "automatic_same_address"
@@ -16,7 +24,6 @@ export type DispositionCode =
   | "not_issuing"
   | "handled_by_exchange"
   | "exchange_no_claim"
-  | "gate_deferred"
   | "multisig_next_stage"
   | "onewallet_recovery"
   | "bridge_later_portal"
@@ -116,6 +123,9 @@ export interface WalletAirdrop {
   held_one: string;
   net_atto: string;
   net_one: string;
+  /** Sent separately by exchange arrangement; never part of the airdrop. */
+  manual_delivery_atto: string;
+  manual_delivery_one: string;
   initial_stage_atto: string;
   initial_stage_one: string;
   issuable_atto: string;
@@ -135,6 +145,8 @@ export interface VaultTotals {
   governor_destination_id: string | null;
   initial_assets_atto: string;
   initial_assets_one: string;
+  exchange_manual_assets_atto: string;
+  exchange_manual_assets_one: string;
   next_stage_assets_atto: string;
   next_stage_assets_one: string;
   qualified_deferred_assets_atto: string;
@@ -161,7 +173,10 @@ export interface VaultPosition {
   redistributed_one: string;
   held_atto: string;
   held_one: string;
-  /** 1:1 with net principal (staked - not_issued) at vault seeding */
+  /** Principal released from the vault and sent separately by exchange arrangement. */
+  manual_delivery_atto: string;
+  manual_delivery_one: string;
+  /** 1:1 with the principal left in the vault at seeding (staked - not_issued - manual_delivery) */
   expected_shares_atto: string;
   expected_shares_one: string;
   initial_stage_shares_atto: string;
@@ -185,7 +200,7 @@ export interface Adjustment {
   destination_address: string | null;
   destination_status: DestinationStatus;
   migration_stage: MigrationStage;
-  issuance_treatment: "issue" | "not_issued" | "redistributed";
+  issuance_treatment: "issue" | "manual_from_reserve" | "not_issued" | "redistributed";
   evidence: string;
 }
 
@@ -197,7 +212,14 @@ export interface ExchangeTreatment {
   migration_stage: string | null;
   issuance_treatment: string | null;
   planned_delivery_status: string;
+  /** `aggregate`, `aggregate_split`, `same_address`, or `tiered` (Gate). */
+  destination_mode: string | null;
+  /** Resolved tier, e.g. `same_address_initial` or `aggregated_non_initial` for Gate. */
+  delivery_tier: string | null;
+  /** Where the wallet part (and, unless split, the staked part) is sent. */
   destination: Destination;
+  /** Set only when the exchange asked for staked ONE at a separate address. */
+  staking_destination: Destination | null;
 }
 
 export interface Disposition {
