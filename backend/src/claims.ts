@@ -105,6 +105,7 @@ function reasonFor(
     not_issuing: "Deduction: not issued",
     redistributed: "WONE reserve redistributed to holders",
     hold: "Held pending a policy decision",
+    exchange_manual: "Sent separately by exchange arrangement",
     ready: "Routed",
     none: "",
   };
@@ -115,6 +116,7 @@ function kindOf(ex: ExceptionRow): AdjustmentKind {
   if (ex.destination_status === "not_issuing") return "deduction";
   if (ex.destination_status === "redistributed") return "redistribution";
   if (ex.destination_status === "hold") return "hold";
+  if (ex.destination_status === "exchange_manual") return "manual_delivery";
   if (ex.exception_type === "validator_wrapper_same_address") return "same_address";
   if (ex.destination_address && ex.destination_address.toLowerCase() === ex.source_address.toLowerCase()) {
     return "same_address";
@@ -122,27 +124,28 @@ function kindOf(ex: ExceptionRow): AdjustmentKind {
   return "redirect";
 }
 
-function destinationFor(
-  gross: bigint,
-  notIssued: bigint,
-  redistributed: bigint,
-  held: bigint,
-  readyRows: ExceptionRow[],
-  sameAddress: string,
-): Destination {
-  const issuable = gross - notIssued - redistributed - held;
-  if (gross === 0n) return { address: null, status: "none" };
+function destinationFor(s: Split, sameAddress: string): Destination {
+  const issuable = s.gross - s.notIssued - s.redistributed - s.held - s.manual;
+  if (s.gross === 0n) return { address: null, status: "none" };
   if (issuable > 0n) {
     const redirects = new Set(
-      readyRows
+      s.ready
         .map((r) => r.destination_address?.toLowerCase() ?? null)
         .filter((a): a is string => a !== null && a !== sameAddress),
     );
     if (redirects.size === 1) return { address: [...redirects][0], status: "ready" };
     return { address: sameAddress, status: "ready" };
   }
-  if (held > 0n) return { address: null, status: "hold" };
-  if (redistributed > 0n && notIssued === 0n) return { address: null, status: "redistributed" };
+  if (s.held > 0n) return { address: null, status: "hold" };
+  if (s.manual > 0n) {
+    const targets = new Set(
+      s.manualRows
+        .map((r) => r.destination_address?.toLowerCase() ?? null)
+        .filter((a): a is string => a !== null),
+    );
+    return { address: targets.size === 1 ? [...targets][0] : null, status: "exchange_manual" };
+  }
+  if (s.redistributed > 0n && s.notIssued === 0n) return { address: null, status: "redistributed" };
   return { address: null, status: "not_issuing" };
 }
 
@@ -151,22 +154,29 @@ interface Split {
   notIssued: bigint;
   redistributed: bigint;
   held: bigint;
+  manual: bigint;
   ready: ExceptionRow[];
+  manualRows: ExceptionRow[];
 }
 
 function splitExceptions(gross: bigint, rows: ExceptionRow[]): Split {
   let notIssued = 0n;
   let redistributed = 0n;
   let held = 0n;
+  let manual = 0n;
   const ready: ExceptionRow[] = [];
+  const manualRows: ExceptionRow[] = [];
   for (const ex of rows) {
     const a = toBigInt(ex.amount_atto);
     if (ex.destination_status === "not_issuing") notIssued += a;
     else if (ex.destination_status === "redistributed") redistributed += a;
     else if (ex.destination_status === "hold") held += a;
-    else ready.push(ex);
+    else if (ex.destination_status === "exchange_manual") {
+      manual += a;
+      manualRows.push(ex);
+    } else ready.push(ex);
   }
-  return { gross, notIssued, redistributed, held, ready };
+  return { gross, notIssued, redistributed, held, manual, ready, manualRows };
 }
 
 function walletBreakdown(account: AccountRow, exceptions: ExceptionRow[]): WalletAirdrop {
@@ -175,20 +185,14 @@ function walletBreakdown(account: AccountRow, exceptions: ExceptionRow[]): Walle
     exceptions.filter((e) => e.component === "wallet_airdrop"),
   );
   const net = s.gross - s.notIssued - s.redistributed;
-  const issuable = net - s.held;
+  const issuable = net - s.held - s.manual;
   const [gross_atto, gross_one] = amountPair(s.gross);
   const [not_issued_atto, not_issued_one] = amountPair(s.notIssued);
   const [redistributed_atto, redistributed_one] = amountPair(s.redistributed);
   const [held_atto, held_one] = amountPair(s.held);
   const [net_atto, net_one] = amountPair(net < 0n ? 0n : net);
-  const destination = destinationFor(
-    s.gross,
-    s.notIssued,
-    s.redistributed,
-    s.held,
-    s.ready,
-    account.address ?? "",
-  );
+  const [manual_delivery_atto, manual_delivery_one] = amountPair(s.manual);
+  const destination = destinationFor(s, account.address ?? "");
   const initialStage = account.stage_policy_applied
     ? account.migration_stage === "initial"
       ? toBigInt(account.migration_wallet_allocation_atto)
@@ -212,6 +216,8 @@ function walletBreakdown(account: AccountRow, exceptions: ExceptionRow[]): Walle
     held_one,
     net_atto,
     net_one,
+    manual_delivery_atto,
+    manual_delivery_one,
     initial_stage_atto,
     initial_stage_one,
     issuable_atto,
@@ -235,20 +241,14 @@ function vaultPositions(
         (e) => e.component === "vault_shares" && (e.validator_address ?? "").toLowerCase() === validator,
       ),
     );
-    const net = s.gross - s.notIssued - s.redistributed;
-    const destination = destinationFor(
-      s.gross,
-      s.notIssued,
-      s.redistributed,
-      s.held,
-      s.ready,
-      account.address ?? "",
-    );
+    const net = s.gross - s.notIssued - s.redistributed - s.manual;
+    const destination = destinationFor(s, account.address ?? "");
     const v = vaultByAddr.get(validator);
     const [staked_atto, staked_one] = amountPair(s.gross);
     const [not_issued_atto, not_issued_one] = amountPair(s.notIssued);
     const [redistributed_atto, redistributed_one] = amountPair(s.redistributed);
     const [held_atto, held_one] = amountPair(s.held);
+    const [manual_delivery_atto, manual_delivery_one] = amountPair(s.manual);
     const [expected_shares_atto, expected_shares_one] = amountPair(net < 0n ? 0n : net);
     const initialShares = account.stage_policy_applied
       ? account.migration_stage === "initial"
@@ -262,6 +262,9 @@ function vaultPositions(
       const [priority_staked_atto, priority_staked_one] = amountPair(v.priority_staked_to_vault_atto);
       const [deferred_staked_atto, deferred_staked_one] = amountPair(v.deferred_staked_to_vault_atto);
       const [initial_assets_atto, initial_assets_one] = amountPair(v.initial_assets_atto);
+      const [exchange_manual_assets_atto, exchange_manual_assets_one] = amountPair(
+        v.exchange_manual_assets_atto,
+      );
       const [next_stage_assets_atto, next_stage_assets_one] = amountPair(v.next_stage_assets_atto);
       const [qualified_deferred_assets_atto, qualified_deferred_assets_one] = amountPair(
         v.qualified_deferred_assets_atto,
@@ -281,6 +284,8 @@ function vaultPositions(
         governor_destination_id: v.governor_destination_id,
         initial_assets_atto,
         initial_assets_one,
+        exchange_manual_assets_atto,
+        exchange_manual_assets_one,
         next_stage_assets_atto,
         next_stage_assets_one,
         qualified_deferred_assets_atto,
@@ -307,6 +312,8 @@ function vaultPositions(
       redistributed_one,
       held_atto,
       held_one,
+      manual_delivery_atto,
+      manual_delivery_one,
       expected_shares_atto,
       expected_shares_one,
       initial_stage_shares_atto,
@@ -373,13 +380,18 @@ function toIso(v: string | Date | null): string | null {
 
 function exchangeTreatments(rows: ExchangeRow[]): ExchangeTreatment[] {
   return rows.map((row) => {
-    const gateAutomatic =
-      row.exchange_id === "gate" && row.planned_delivery_status === "automatic_same_address";
-    const status: DestinationStatus = gateAutomatic
-      ? "ready"
-      : row.configured_destination_status === "ready"
-        ? "ready"
-        : "hold";
+    const status: DestinationStatus =
+      row.planned_delivery_status === "exchange_manual"
+        ? "exchange_manual"
+        : row.planned_delivery_status === "hold"
+          ? "hold"
+          : "none";
+    const walletAddress = status === "exchange_manual"
+      ? row.planned_wallet_destination?.toLowerCase() ?? null
+      : null;
+    const stakingAddress = status === "exchange_manual"
+      ? row.planned_staking_destination?.toLowerCase() ?? null
+      : null;
     return {
       exchange_id: row.exchange_id,
       display_name: row.display_name,
@@ -388,12 +400,13 @@ function exchangeTreatments(rows: ExchangeRow[]): ExchangeTreatment[] {
       migration_stage: row.migration_stage,
       issuance_treatment: row.issuance_treatment,
       planned_delivery_status: row.planned_delivery_status,
-      destination: {
-        address: gateAutomatic
-          ? row.address.toLowerCase()
-          : row.configured_destination?.toLowerCase() ?? null,
-        status,
-      },
+      destination_mode: row.destination_mode,
+      delivery_tier: row.delivery_tier,
+      destination: { address: walletAddress, status },
+      staking_destination:
+        stakingAddress && stakingAddress !== walletAddress
+          ? { address: stakingAddress, status }
+          : null,
     };
   });
 }
@@ -401,6 +414,7 @@ function exchangeTreatments(rows: ExchangeRow[]): ExchangeTreatment[] {
 function asMigrationStage(value: string | null): MigrationStage {
   if (
     value === "initial" ||
+    value === "exchange_manual" ||
     value === "next_stage" ||
     value === "deferred" ||
     value === "manual_review" ||
@@ -422,24 +436,30 @@ function reviewedContractIsNotIssued(account: AccountRow): boolean {
 }
 
 function migrationPolicyFor(account: AccountRow): MigrationPolicy {
-  const issuance = account.issuance_treatment === "not_issued" || reviewedContractIsNotIssued(account)
-    ? "not_issued"
-    : "issue";
+  const manual = account.issuance_treatment === "manual_from_reserve";
+  const issuance: MigrationPolicy["issuance_treatment"] = manual
+    ? "manual_from_reserve"
+    : account.issuance_treatment === "not_issued" || reviewedContractIsNotIssued(account)
+      ? "not_issued"
+      : "issue";
   const fallbackStage: MigrationStage = !account.meets_threshold
     ? "below_threshold"
     : null;
-  const stage = account.stage_policy_applied
-    ? asMigrationStage(account.migration_stage)
-    : issuance === "not_issued"
-      ? null
-      : fallbackStage;
-  const wallet = account.stage_policy_applied
+  const stage = manual
+    ? "exchange_manual"
+    : account.stage_policy_applied
+      ? asMigrationStage(account.migration_stage)
+      : issuance === "not_issued"
+        ? null
+        : fallbackStage;
+  const hasAllocation = account.stage_policy_applied || manual;
+  const wallet = hasAllocation
     ? toBigInt(account.migration_wallet_allocation_atto)
     : 0n;
-  const staked = account.stage_policy_applied
+  const staked = hasAllocation
     ? toBigInt(account.migration_staked_to_vault_atto)
     : 0n;
-  const total = account.stage_policy_applied
+  const total = hasAllocation
     ? toBigInt(account.migration_allocation_atto)
     : wallet + staked;
   const [wallet_allocation_atto, wallet_allocation_one] = amountPair(wallet);
@@ -487,6 +507,41 @@ function leftOutOfInitialAirdrop(
   return null;
 }
 
+function exchangeDisposition(exchange: ExchangeTreatment): Disposition {
+  const name = exchange.display_name;
+  const title = `Handled by ${name}`;
+  const intro = `This is a ${name} wallet, so it is not part of the airdrop.`;
+  if (exchange.destination.status !== "exchange_manual") {
+    return {
+      code: "handled_by_exchange",
+      title,
+      detail: `${intro} Its full balance will be sent separately once ${name} confirms a delivery address.`,
+      destination: exchange.destination,
+    };
+  }
+  const sameAddress =
+    exchange.delivery_tier === "same_address" || exchange.delivery_tier === "same_address_initial";
+  const target = sameAddress
+    ? "to this same address"
+    : exchange.staking_destination
+      ? `to ${name}: the liquid balance to one ${name} address and staked ONE, including rewards, to another`
+      : `to ${name}'s consolidation address`;
+  const tier =
+    exchange.delivery_tier === "same_address_initial"
+      ? " It meets the initial airdrop criteria, so,"
+      : exchange.delivery_tier === "aggregated_non_initial"
+        ? " It does not meet the initial airdrop criteria, so,"
+        : "";
+  return {
+    code: "handled_by_exchange",
+    title,
+    detail: tier
+      ? `${intro}${tier} as arranged with ${name}, its full balance is sent separately ${target}.`
+      : `${intro} As arranged with ${name}, its full balance is sent separately ${target}.`,
+    destination: exchange.destination,
+  };
+}
+
 function dispositionFor(
   account: AccountRow | null,
   exchanges: ExchangeTreatment[],
@@ -507,12 +562,15 @@ function dispositionFor(
     };
   }
 
-  if (!account && exchanges.length > 0) {
-    const exchange = exchanges.find((row) => row.exchange_id !== "gate") ?? exchanges[0];
+  if (exchanges.length > 0) {
+    const exchange = exchanges[0];
+    if (migration?.issuance_treatment === "manual_from_reserve") {
+      return exchangeDisposition(exchange);
+    }
     return {
       code: "exchange_no_claim",
-      title: `${exchange.display_name}-controlled wallet — no claim recorded`,
-      detail: "Exchange inventory membership is recorded, but no positive cutoff claim exists for this address. No entitlement or payout destination is assigned.",
+      title: `${exchange.display_name} wallet — nothing to deliver`,
+      detail: `This address is on ${exchange.display_name}'s wallet list, but it held nothing to migrate at the cutoff.`,
       destination: { address: null, status: "none" },
     };
   }
@@ -522,26 +580,6 @@ function dispositionFor(
       code: "hold",
       title: "Migration stage unavailable",
       detail: "Snapshot qualification is recorded, but the reviewed migration-stage policy has not been loaded. No initial-stage delivery is authorized.",
-      destination: { address: null, status: "hold" },
-    };
-  }
-
-  const gate = exchanges.find((row) => row.exchange_id === "gate");
-  if (gate) {
-    if (gate.migration_stage === "initial" && migration?.stage === "initial") {
-      return {
-        code: "automatic_same_address",
-        title: "Initial-stage airdrop applies",
-        detail: "This Gate-controlled wallet is included in the current initial-stage same-address airdrop.",
-        destination: gate.destination,
-      };
-    }
-    return {
-      code: "gate_deferred",
-      title: "Gate wallet deferred",
-      detail: migration?.stage_reason
-        ? `${sentenceCase(migration.stage_reason)}. Gate requested no aggregate reroute.`
-        : "This wallet is not in the initial stage. Gate requested no aggregate reroute.",
       destination: { address: null, status: "hold" },
     };
   }
@@ -611,19 +649,6 @@ function dispositionFor(
     };
   }
 
-  const nonGate = exchanges.find((row) => row.exchange_id !== "gate");
-  if (nonGate) {
-    const routed = nonGate.destination.status === "ready" && nonGate.destination.address;
-    return {
-      code: "handled_by_exchange",
-      title: `Initial stage — handled by ${nonGate.display_name}`,
-      detail: routed
-        ? `This exchange-controlled wallet is in the initial stage. Its entitlement is routed to the ${nonGate.display_name} aggregate address rather than the source wallet.`
-        : `This exchange-controlled wallet is in the initial stage, but its ${nonGate.display_name} aggregate destination is pending approval.`,
-      destination: nonGate.destination,
-    };
-  }
-
   if (account?.account_category === "contract") {
     return {
       code: "contract_recovery",
@@ -682,6 +707,7 @@ export function buildClaimResponse(
     : importedExchanges.map((row) => ({
         ...row,
         destination: { address: null, status: "none" as const },
+        staking_destination: null,
       }));
   const base: ClaimResponse = {
     found: false,
@@ -704,7 +730,7 @@ export function buildClaimResponse(
   if (!account) {
     base.notes.push(
       exchanges.length > 0
-        ? "No positive migration claim was recorded for this exchange-controlled address at the cutoff."
+        ? "No balance, stake or pending amount was recorded for this exchange wallet at the cutoff."
         : "No balance, stake or pending amount was recorded for this address at the cutoff.",
     );
     return base;
@@ -724,7 +750,7 @@ export function buildClaimResponse(
     null,
   );
 
-  if (isContract) {
+  if (isContract && contractMigration.issuance_treatment !== "manual_from_reserve") {
     notes.push(
       contractMigration.issuance_treatment === "not_issued"
         ? `This address is a reviewed smart contract${category ? ` (${category})` : ""}. Its migration allocation is not issued and is retained in the 2050 premint reserve.`
@@ -748,32 +774,8 @@ export function buildClaimResponse(
 
   const grossTotal = toBigInt(account.total_claim_atto);
   const qualificationTotal = toBigInt(account.qualification_total_atto);
-  let wallet = walletBreakdown(account, exceptions);
-  let positions = vaultPositions(account, delegations, exceptions, vaults);
-  const gateAggregatePending = exchanges.some(
-    (row) =>
-      row.exchange_id === "gate" &&
-      (account.stage_policy_applied
-        ? row.migration_stage !== "initial"
-        : row.planned_delivery_status !== "automatic_same_address"),
-  );
-  if (gateAggregatePending) {
-    wallet = {
-      ...wallet,
-      held_atto: wallet.net_atto,
-      held_one: wallet.net_one,
-      issuable_atto: "0",
-      issuable_one: "0",
-      destination: { address: null, status: "hold" },
-    };
-    positions = positions.map((position) => ({
-      ...position,
-      held_atto: position.expected_shares_atto,
-      held_one: position.expected_shares_one,
-      status: "hold",
-      destination: { address: null, status: "hold" },
-    }));
-  }
+  const wallet = walletBreakdown(account, exceptions);
+  const positions = vaultPositions(account, delegations, exceptions, vaults);
 
   const adjustments: Adjustment[] = exceptions.map((ex) => {
     const r = reasonFor(ex, reasonTexts);
@@ -812,7 +814,8 @@ export function buildClaimResponse(
   const netTotal = netTotalRaw < 0n ? 0n : netTotalRaw;
   const netStaked = positions.reduce((acc, position) => acc + toBigInt(position.expected_shares_atto), 0n);
   let migration = migrationPolicyFor(account);
-  if (!account.stage_policy_applied) {
+  const manualDelivery = migration.issuance_treatment === "manual_from_reserve";
+  if (!account.stage_policy_applied && !manualDelivery) {
     const compiledStage = exceptions
       .map((exception) => asMigrationStage(exception.migration_stage))
       .find((stage) => stage !== null);
@@ -857,7 +860,15 @@ export function buildClaimResponse(
     wallet.destination,
   );
 
-  if (!account.meets_threshold) {
+  if (manualDelivery) {
+    const exchangeName = exchanges[0]?.display_name ?? "the exchange";
+    const manualTotal =
+      toBigInt(wallet.manual_delivery_atto) +
+      positions.reduce((acc, p) => acc + toBigInt(p.manual_delivery_atto), 0n);
+    notes.push(
+      `${formatOne(manualTotal)} ONE is sent separately from the 2050 reserve as arranged with ${exchangeName}. None of it is in the airdrop, and the minimum balance and activity rules do not apply.`,
+    );
+  } else if (!account.meets_threshold) {
     notes.push(
       `This address's total at the cutoff (${formatOne(qualificationTotal)} ONE) is under the ${formatOne(meta.threshold_atto, 0)} ONE minimum, so it is not in the initial airdrop.`,
     );
