@@ -19,7 +19,7 @@ export interface AccountRow {
   policy_category: string | null;
   stage_policy_applied: boolean;
   migration_stage: string | null;
-  issuance_treatment: "issue" | "not_issued";
+  issuance_treatment: "issue" | "manual_from_reserve" | "not_issued";
   stage_reason: string | null;
   migration_wallet_allocation_atto: string;
   migration_staked_to_vault_atto: string;
@@ -64,6 +64,7 @@ export interface VaultRow {
   governor_status: string;
   validator_name: string | null;
   initial_assets_atto: string;
+  exchange_manual_assets_atto: string;
   next_stage_assets_atto: string;
   qualified_deferred_assets_atto: string;
   manual_review_assets_atto: string;
@@ -77,7 +78,7 @@ export interface ExceptionRow {
   source_address: string;
   source_category: string;
   migration_stage: string | null;
-  issuance_treatment: "issue" | "not_issued" | "redistributed" | null;
+  issuance_treatment: "issue" | "manual_from_reserve" | "not_issued" | "redistributed" | null;
   validator_address: string | null;
   amount_atto: string;
   exception_type: string;
@@ -85,7 +86,7 @@ export interface ExceptionRow {
   route_priority: string | number;
   destination_id: string | null;
   destination_address: string | null;
-  destination_status: "ready" | "hold" | "not_issuing" | "redistributed";
+  destination_status: "ready" | "hold" | "exchange_manual" | "not_issuing" | "redistributed";
   reason: string;
   evidence: string;
 }
@@ -101,6 +102,10 @@ export interface ExchangeRow {
   planned_delivery_status: string;
   configured_destination: string | null;
   configured_destination_status: string;
+  destination_mode: string | null;
+  delivery_tier: string | null;
+  planned_wallet_destination: string | null;
+  planned_staking_destination: string | null;
 }
 
 export interface ReasonText {
@@ -236,7 +241,9 @@ export class PgRepository implements ClaimRepository {
       `SELECT exchange_id, display_name, address, delivery_policy,
               qualification_status, migration_stage, issuance_treatment,
               planned_delivery_status,
-              configured_destination, configured_destination_status
+              configured_destination, configured_destination_status,
+              destination_mode, delivery_tier,
+              planned_wallet_destination, planned_staking_destination
          FROM exchange_wallets
         WHERE address = $1
         ORDER BY exchange_id`,
@@ -246,6 +253,8 @@ export class PgRepository implements ClaimRepository {
       ...r,
       address: r.address.trim(),
       configured_destination: trimChar(r.configured_destination),
+      planned_wallet_destination: trimChar(r.planned_wallet_destination),
+      planned_staking_destination: trimChar(r.planned_staking_destination),
     }));
   }
 
@@ -255,6 +264,7 @@ export class PgRepository implements ClaimRepository {
       `SELECT validator_address, vault_assets_atto::text, priority_staked_to_vault_atto::text,
               deferred_staked_to_vault_atto::text, delegation_rows, governor_destination_id,
               governor_status, validator_name, initial_assets_atto::text,
+              exchange_manual_assets_atto::text,
               next_stage_assets_atto::text, qualified_deferred_assets_atto::text,
               manual_review_assets_atto::text, uncompiled_deferred_assets_atto::text,
               not_issued_assets_atto::text, post_policy_assets_atto::text
