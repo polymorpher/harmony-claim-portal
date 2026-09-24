@@ -1,13 +1,25 @@
-import { claimCanRequestConfirmation, type Adjustment, type ClaimResponse, type VaultPosition } from "@hcp/shared";
+import {
+  claimCanRequestConfirmation,
+  type Adjustment,
+  type ClaimResponse,
+  type ExchangeTreatment,
+  type VaultPosition,
+} from "@hcp/shared";
 import { formatUtc, one, shortAddress } from "./format";
 
 const STATUS_LABEL: Record<string, string> = {
   ready: "Ready",
   hold: "On hold",
+  exchange_manual: "Sent separately",
   not_issuing: "Not issued",
   redistributed: "Redistributed",
   none: "-",
 };
+
+function manualExchange(claim: ClaimResponse): ExchangeTreatment | null {
+  if (claim.migration_policy?.issuance_treatment !== "manual_from_reserve") return null;
+  return claim.exchange_treatments[0] ?? null;
+}
 
 function Banner({ claim }: { claim: ClaimResponse }) {
   const disposition = claim.disposition;
@@ -49,9 +61,9 @@ function Banner({ claim }: { claim: ClaimResponse }) {
 }
 
 function AddressBlock({ claim }: { claim: ClaimResponse }) {
-  const nonGateExchange = claim.exchange_treatments.find((row) => row.exchange_id !== "gate");
-  const accountType = nonGateExchange
-    ? "exchange-controlled wallet"
+  const exchange = claim.exchange_treatments[0];
+  const accountType = exchange
+    ? `${exchange.display_name} exchange wallet`
     : claim.account_type?.replace(/_/g, " ");
   return (
     <dl className="addr">
@@ -77,10 +89,13 @@ function Wallet({ claim }: { claim: ClaimResponse }) {
   const w = claim.wallet_airdrop;
   const c = claim.components;
   if (!w || !c) return null;
-  const walletDeductions = claim.adjustments.filter((a) => a.component === "wallet_airdrop" && a.kind !== "same_address");
+  const exchange = manualExchange(claim);
+  const walletDeductions = claim.adjustments.filter(
+    (a) => a.component === "wallet_airdrop" && a.kind !== "same_address" && a.kind !== "manual_delivery",
+  );
   return (
     <div className="block">
-      <h3>Wallet airdrop (ERC-20 ONE)</h3>
+      <h3>{exchange ? "Wallet balance (ERC-20 ONE)" : "Wallet airdrop (ERC-20 ONE)"}</h3>
       <table>
         <tbody>
           <tr>
@@ -128,19 +143,32 @@ function Wallet({ claim }: { claim: ClaimResponse }) {
             <td>Post-deduction wallet entitlement</td>
             <td className="num">{one(w.net_atto)}</td>
           </tr>
-          <tr className="total">
-            <td>Initial-stage wallet allocation</td>
-            <td className="num">{one(w.initial_stage_atto)}</td>
-          </tr>
-          <tr className="total">
-            <td>Deliverable in the initial stage</td>
-            <td className="num">{one(w.issuable_atto)}</td>
-          </tr>
+          {exchange ? (
+            <tr className="total">
+              <td>Sent separately, as arranged with {exchange.display_name}</td>
+              <td className="num">{one(w.manual_delivery_atto)}</td>
+            </tr>
+          ) : (
+            <>
+              <tr className="total">
+                <td>Initial-stage wallet allocation</td>
+                <td className="num">{one(w.initial_stage_atto)}</td>
+              </tr>
+              <tr className="total">
+                <td>Deliverable in the initial stage</td>
+                <td className="num">{one(w.issuable_atto)}</td>
+              </tr>
+            </>
+          )}
           <tr>
-            <td>Routing destination</td>
+            <td>{exchange ? "Sent to" : "Routing destination"}</td>
             <td className="num">
-              {w.destination.address ? (
+              {w.destination.address === claim.address.hex ? (
+                "This address"
+              ) : w.destination.address ? (
                 <code title={w.destination.address}>{shortAddress(w.destination.address)}</code>
+              ) : exchange?.staking_destination && w.destination.status === "exchange_manual" ? (
+                `Both ${exchange.display_name} addresses below`
               ) : (
                 STATUS_LABEL[w.destination.status]
               )}
@@ -152,31 +180,55 @@ function Wallet({ claim }: { claim: ClaimResponse }) {
   );
 }
 
+const DELIVERY_LABEL: Record<string, string> = {
+  aggregate: "Sent to the exchange's consolidation address",
+  aggregate_split: "Liquid balance and staking amounts sent to separate exchange addresses",
+  same_address: "Sent to this same address",
+  same_address_initial: "Meets the initial airdrop criteria, so it is sent to this same address",
+  aggregated_non_initial: "Does not meet the initial airdrop criteria, so it is sent to the exchange's consolidation address",
+};
+
+function deliveryLabel(row: ExchangeTreatment): string {
+  if (row.destination.status === "none") return "Nothing to send; no balance at the cutoff";
+  if (row.destination.status === "hold") return "Waiting for the exchange to confirm an address";
+  return DELIVERY_LABEL[row.delivery_tier ?? ""] ?? "Sent separately, as arranged with the exchange";
+}
+
+function ExchangeAddress({ address, self }: { address: string | null; self: string }) {
+  if (!address) return <>-</>;
+  if (address === self) return <>This address</>;
+  return <code>{address}</code>;
+}
+
 function Exchanges({ claim }: { claim: ClaimResponse }) {
   if (claim.exchange_treatments.length === 0) return null;
   return (
     <div className="block">
-      <h3>Exchange custody</h3>
+      <h3>Exchange arrangement</h3>
       {claim.exchange_treatments.map((row) => (
         <dl className="addr" key={row.exchange_id}>
           <dt>Exchange</dt>
           <dd>{row.display_name}</dd>
-          <dt>Current treatment</dt>
-          <dd>{row.planned_delivery_status.replace(/_/g, " ")}</dd>
-          <dt>Migration stage</dt>
-          <dd>{(row.migration_stage ?? "not assigned").replace(/_/g, " ")}</dd>
-          <dt>{row.exchange_id === "gate" ? "Delivery policy" : "Aggregate destination"}</dt>
-          <dd>
-            {row.exchange_id === "gate" && row.migration_stage !== "initial" ? (
-              "Deferred; Gate requested no aggregate reroute"
-            ) : row.destination.address ? (
-              <code>{row.destination.address}</code>
-            ) : row.destination.status === "none" ? (
-              "Not applicable — no cutoff claim"
-            ) : (
-              STATUS_LABEL[row.destination.status]
-            )}
-          </dd>
+          <dt>Delivery</dt>
+          <dd>{deliveryLabel(row)}</dd>
+          {row.destination.status === "exchange_manual" && (
+            <>
+              <dt>{row.staking_destination ? "Liquid balance and WONE sent to" : "Sent to"}</dt>
+              <dd>
+                <ExchangeAddress address={row.destination.address} self={claim.address.hex} />
+              </dd>
+              {row.staking_destination && (
+                <>
+                  <dt>Staked ONE, rewards and undelegations sent to</dt>
+                  <dd>
+                    <ExchangeAddress address={row.staking_destination.address} self={claim.address.hex} />
+                  </dd>
+                </>
+              )}
+              <dt>Paid from</dt>
+              <dd>The 2050 reserve, not the airdrop</dd>
+            </>
+          )}
         </dl>
       ))}
     </div>
@@ -185,11 +237,14 @@ function Exchanges({ claim }: { claim: ClaimResponse }) {
 
 function Vaults({ positions }: { positions: VaultPosition[] }) {
   if (positions.length === 0) return null;
+  const released = positions.some((p) => p.manual_delivery_atto !== "0");
   return (
     <div className="block">
       <h3>Validator vault shares (ERC-4626)</h3>
       <p className="small">
-        Active stake becomes shares in the validator's vault, 1:1 with the net principal at vault seeding.
+        {released
+          ? "Staked ONE of exchange wallets is taken out of the validator's vault and sent separately, so no vault shares are created for it."
+          : "Active stake becomes shares in the validator's vault, 1:1 with the net principal at vault seeding."}
       </p>
       <table>
         <thead>
@@ -198,8 +253,9 @@ function Vaults({ positions }: { positions: VaultPosition[] }) {
             <th className="num">Principal</th>
             <th className="num">Not issued</th>
             <th className="num">On hold</th>
+            {released && <th className="num">Sent separately</th>}
             <th className="num">Expected shares</th>
-            <th className="num">Initial-stage shares</th>
+            {!released && <th className="num">Initial-stage shares</th>}
             <th>Status</th>
           </tr>
         </thead>
@@ -217,11 +273,14 @@ function Vaults({ positions }: { positions: VaultPosition[] }) {
               <td className="num">{one(p.staked_atto)}</td>
               <td className="num">{one(p.not_issued_atto)}</td>
               <td className="num">{one(p.held_atto)}</td>
+              {released && <td className="num">{one(p.manual_delivery_atto)}</td>}
               <td className="num">{one(p.expected_shares_atto)}</td>
-              <td className="num">{one(p.initial_stage_shares_atto)}</td>
+              {!released && <td className="num">{one(p.initial_stage_shares_atto)}</td>}
               <td>
                 {STATUS_LABEL[p.status]}
-                {!p.initial_stage ? <div className="small">not in initial stage</div> : null}
+                {!p.initial_stage && p.status !== "exchange_manual" ? (
+                  <div className="small">not in initial stage</div>
+                ) : null}
               </td>
             </tr>
           ))}
@@ -233,6 +292,7 @@ function Vaults({ positions }: { positions: VaultPosition[] }) {
 
 const STAGE_LABEL: Record<string, string> = {
   initial: "Included",
+  exchange_manual: "Not included (sent separately, as arranged with the exchange)",
   deferred: "Not included",
   next_stage: "Not included (handled in a later stage)",
   manual_review: "Under review",
@@ -245,6 +305,7 @@ const REASON_LABEL: Record<string, string> = {
   "prior reviewed non-issuance consumes allocation": "The full amount was already handled by an earlier policy decision",
   "reviewed contract allocation retained in 2050 premint reserve": "Reviewed smart contract; amount kept in the 2050 reserve",
   "reviewed contract allocation reserved for next stage": "Reviewed smart contract; handled in a later stage",
+  "exchange wallet delivered manually from the 2050 supply reserve": "Exchange wallet; handled by the exchange's arrangement",
 };
 
 function reasonLabel(reason: string): string {
@@ -257,18 +318,25 @@ function Migration({ claim }: { claim: ClaimResponse }) {
   const policy = claim.migration_policy;
   if (!policy) return null;
   const stage = policy.stage ? STAGE_LABEL[policy.stage] ?? policy.stage.replace(/_/g, " ") : "Not assigned";
+  const manual = policy.issuance_treatment === "manual_from_reserve";
   return (
     <div className="block">
       <h3>Migration policy</h3>
       <dl className="addr">
         <dt>Balance requirement</dt>
-        <dd>{policy.snapshot_qualified ? "Met" : "Not met"}</dd>
+        <dd>{manual ? "Does not apply to exchange wallets" : policy.snapshot_qualified ? "Met" : "Not met"}</dd>
         <dt>Initial airdrop</dt>
         <dd>{stage}</dd>
         {policy.issuance_treatment === "not_issued" && (
           <>
             <dt>Tokens</dt>
             <dd>Not issued; kept in the 2050 reserve</dd>
+          </>
+        )}
+        {manual && (
+          <>
+            <dt>Tokens</dt>
+            <dd>Sent separately from the 2050 reserve</dd>
           </>
         )}
         {policy.stage_reason && (
@@ -283,7 +351,7 @@ function Migration({ claim }: { claim: ClaimResponse }) {
 }
 
 function Adjustments({ adjustments }: { adjustments: Adjustment[] }) {
-  const relevant = adjustments.filter((a) => a.kind !== "same_address");
+  const relevant = adjustments.filter((a) => a.kind !== "same_address" && a.kind !== "manual_delivery");
   if (relevant.length === 0) return null;
   return (
     <div className="block">
@@ -311,6 +379,7 @@ function Adjustments({ adjustments }: { adjustments: Adjustment[] }) {
 }
 
 export function ClaimView({ claim }: { claim: ClaimResponse }) {
+  const exchange = manualExchange(claim);
   return (
     <div className="claim">
       <Banner claim={claim} />
@@ -327,14 +396,29 @@ export function ClaimView({ claim }: { claim: ClaimResponse }) {
             <span className="label">Total migration allocation</span>
             <span className="big">{one(claim.migration_policy?.total_allocation_atto ?? claim.eligibility.total_claim_atto)} ONE</span>
           </div>
-          <div>
-            <span className="label">Wallet amount in the initial airdrop</span>
-            <span className="big">{one(claim.wallet_airdrop?.initial_stage_atto)} ONE</span>
-          </div>
-          <div>
-            <span className="label">Vault shares in the initial airdrop</span>
-            <span className="big">{one(claim.migration_policy?.stage === "initial" ? claim.migration_policy.staked_to_vault_atto : "0")} ONE</span>
-          </div>
+          {exchange ? (
+            <>
+              <div>
+                <span className="label">Wallet amount sent separately</span>
+                <span className="big">{one(claim.migration_policy?.wallet_allocation_atto)} ONE</span>
+              </div>
+              <div>
+                <span className="label">Staked amount sent separately</span>
+                <span className="big">{one(claim.migration_policy?.staked_to_vault_atto)} ONE</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div>
+                <span className="label">Wallet amount in the initial airdrop</span>
+                <span className="big">{one(claim.wallet_airdrop?.initial_stage_atto)} ONE</span>
+              </div>
+              <div>
+                <span className="label">Vault shares in the initial airdrop</span>
+                <span className="big">{one(claim.migration_policy?.stage === "initial" ? claim.migration_policy.staked_to_vault_atto : "0")} ONE</span>
+              </div>
+            </>
+          )}
         </div>
       )}
       <Migration claim={claim} />
