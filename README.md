@@ -38,11 +38,17 @@ Single-address lookups only; there are no list, search or aggregate endpoints.
   mixed case) or `one1...`; returns the address in hex/checksum/bech32 forms,
   `account_type`, snapshot `eligibility`, separate `migration_policy`,
   native/WONE `components`,
-  `wallet_airdrop` (gross, not_issued, redistributed, held, net, deliverable,
-  destination), `vault_positions[]`, `exchange_treatments[]`, a user-facing
-  `disposition`, `adjustments[]`, and `notes[]`. The migration policy separates
-  the six-month initial stage, later stages, and terminal non-issuance from
-  destination readiness. Smart-contract amounts remain hidden unless
+  `wallet_airdrop` (gross, not_issued, redistributed, held, net, manual
+  delivery, deliverable, destination), `vault_positions[]`,
+  `exchange_treatments[]`, a user-facing `disposition`, `adjustments[]`, and
+  `notes[]`. The migration policy separates the six-month initial stage, later
+  stages, exchange manual delivery, and terminal non-issuance from destination
+  readiness. Exchange wallets are never airdropped: their whole entitlement,
+  including stake released from the validator vaults, is stage
+  `exchange_manual` with treatment `manual_from_reserve`, sent separately from
+  the 2050 reserve to the destination(s) the exchange confirmed (consolidation
+  address, split wallet/staking addresses, the same address, or Gate's tiers).
+  Smart-contract amounts remain hidden unless
   `EXPOSE_CONTRACT_AMOUNTS=true`, while reviewed next-stage or not-issued
   treatment is still shown.
 
@@ -140,8 +146,12 @@ All scripts are idempotent bash over `gcloud`/`curl`; re-running is safe.
      materialized initial-stage summary all report `ready`): with the tunnel open,
      `python3 injector/inject_claims.py --migration-repo ~/git/harmony-migration --dsn "$(backend/deploy/tunnel-db.sh --print-dsn)" --data-version 2026-09-17 --validator-names`.
      Run `--dry-run` first. The injector refuses a real load while any release
-     gate is held. A permitted load is a staging-schema swap, so the API never
-     sees partial data.
+     gate is held unless `--allow-held-routing` is passed; the site then shows
+     the held routing status and its preview banner. A load is a staging-schema
+     swap, so the API never sees partial data.
+   - After a data load that changes the exchange inventory, reload the
+     confirmation candidates (`db/ops/load-candidates.sh`, see
+     `db/ops/README.md`) so newly listed exchange wallets cannot sign.
 5. Public cutover:
    1. `infra/cloudflare/setup-dns.sh --cutover [--rate-limit]` - creates proxied A records, keeps the ACME CNAMEs DNS-only, and applies SSL Full (strict), Always Use HTTPS, and TLS 1.2+.
    2. Verify `curl -fsS https://$DOMAIN/api/health` and a known approved fixture or real claim.
