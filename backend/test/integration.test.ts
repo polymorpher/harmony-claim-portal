@@ -80,7 +80,8 @@ suite("integration against fixture database", () => {
     expect(body.wallet_airdrop.held_one).toBe("300");
     expect(body.wallet_airdrop.issuable_one).toBe("0");
     expect(body.wallet_airdrop.destination.status).toBe("hold");
-    expect(body.disposition.code).toBe("gate_deferred");
+    expect(body.disposition.code).toBe("deferred");
+    expect(body.exchange_treatments).toEqual([]);
   });
 
   it("loads WONE component fields from the fixture", async () => {
@@ -91,14 +92,32 @@ suite("integration against fixture database", () => {
     expect(body.components.native_wallet_airdrop_atto).not.toBe(body.wallet_airdrop.gross_atto);
   });
 
-  it("loads exchange-controlled routing metadata", async () => {
+  it("loads exchange manual delivery, including stake released from the vault", async () => {
     const exchange = "0xa0ee7a142d267c1f36714e4a8f75612f20a79720";
     const res = await app.inject({ method: "GET", url: `/api/v1/claims/${exchange}` });
     const body = res.json();
     expect(body.exchange_treatments[0].display_name).toBe("OKX");
-    expect(body.migration_policy.stage).toBe("deferred");
-    expect(body.disposition.code).toBe("deferred");
+    expect(body.exchange_treatments[0].destination_mode).toBe("aggregate");
+    expect(body.migration_policy.stage).toBe("exchange_manual");
+    expect(body.migration_policy.issuance_treatment).toBe("manual_from_reserve");
+    expect(body.migration_policy.total_allocation_one).toBe("1600");
+    expect(body.disposition.code).toBe("handled_by_exchange");
+    expect(body.disposition.destination).toEqual({ address: "0x" + "dd".repeat(20), status: "exchange_manual" });
+    expect(body.wallet_airdrop.manual_delivery_one).toBe("100");
     expect(body.wallet_airdrop.issuable_atto).toBe("0");
+    expect(body.vault_positions[0].manual_delivery_one).toBe("1500");
+    expect(body.vault_positions[0].expected_shares_atto).toBe("0");
+    expect(body.vault_positions[0].vault.exchange_manual_assets_one).toBe("1500");
+  });
+
+  it("loads Gate's tiered delivery and same-address exchanges", async () => {
+    const gate = (await app.inject({ method: "GET", url: `/api/v1/claims/0x${"aa".repeat(20)}` })).json();
+    expect(gate.exchange_treatments[0].delivery_tier).toBe("aggregated_non_initial");
+    expect(gate.disposition.destination).toEqual({ address: "0x" + "bb".repeat(20), status: "exchange_manual" });
+    const bybit = (await app.inject({ method: "GET", url: `/api/v1/claims/0x${"cc".repeat(20)}` })).json();
+    expect(bybit.disposition.code).toBe("handled_by_exchange");
+    expect(bybit.wallet_airdrop.destination).toEqual({ address: "0x" + "cc".repeat(20), status: "exchange_manual" });
+    expect(bybit.migration_policy.stage).toBe("exchange_manual");
   });
 
   it("does not assign an entitlement or destination to exchange-only inventory", async () => {

@@ -35,8 +35,29 @@ export const ADDR = {
   inactive: "0x6666666666666666666666666666666666666666",
   smartvault: "0x7777777777777777777777777777777777777777",
   stageMissing: "0x8888888888888888888888888888888888888888",
-  exchangeDeferred: "0x9999999999999999999999999999999999999999",
+  exchangeSplit: "0x9999999999999999999999999999999999999999",
+  gateInitial: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  okxDestination: "0xdddddddddddddddddddddddddddddddddddddddd",
+  gateDestination: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  binanceWallet: "0xb1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+  binanceStaking: "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
 } as const;
+
+const EXCHANGE_STAGE_REASON = "exchange wallet delivered manually from the 2050 supply reserve";
+
+function exchangeAccount(address: string, wallet: bigint, staked = 0n): AccountRow {
+  return account({
+    address,
+    wallet_airdrop_atto: wallet.toString(),
+    staked_to_vault_atto: staked.toString(),
+    migration_stage: "exchange_manual",
+    issuance_treatment: "manual_from_reserve",
+    stage_reason: EXCHANGE_STAGE_REASON,
+    migration_wallet_allocation_atto: wallet.toString(),
+    migration_staked_to_vault_atto: staked.toString(),
+    migration_allocation_atto: (wallet + staked).toString(),
+  });
+}
 
 export function account(partial: Partial<AccountRow> & { address: string }): AccountRow {
   const wallet = partial.wallet_airdrop_atto ?? "0";
@@ -145,8 +166,10 @@ export const accounts: AccountRow[] = [
     native_total_claim_atto: one(800),
     total_claim_atto: one(1100),
   }),
-  account({ address: ADDR.gate, wallet_airdrop_atto: one(500) }),
-  account({ address: ADDR.exchange, wallet_airdrop_atto: one(1500), policy_category: "excluded" }),
+  exchangeAccount(ADDR.gate, 500n * ONE),
+  exchangeAccount(ADDR.gateInitial, 5000n * ONE),
+  exchangeAccount(ADDR.exchange, 1500n * ONE, 500n * ONE),
+  exchangeAccount(ADDR.exchangeSplit, 700n * ONE, 400n * ONE),
   account({
     address: ADDR.onewallet,
     account_category: "contract",
@@ -175,13 +198,6 @@ export const accounts: AccountRow[] = [
     migration_wallet_allocation_atto: "0",
     migration_staked_to_vault_atto: "0",
     migration_allocation_atto: "0",
-  }),
-  account({
-    address: ADDR.exchangeDeferred,
-    wallet_airdrop_atto: one(2500),
-    policy_category: "excluded",
-    migration_stage: "deferred",
-    stage_reason: "wallet activity predates initial window",
   }),
   account({
     address: ADDR.inactive,
@@ -221,6 +237,8 @@ export const delegations: DelegationRow[] = [
   { validator_address: ADDR.v1, delegator_address: ADDR.excl, staked_to_vault_atto: one(3000), is_self_delegation: false, priority: true },
   { validator_address: ADDR.v2, delegator_address: ADDR.excl, staked_to_vault_atto: one(1000), is_self_delegation: false, priority: true },
   { validator_address: ADDR.v1, delegator_address: ADDR.partial, staked_to_vault_atto: one(2000), is_self_delegation: false, priority: true },
+  { validator_address: ADDR.v2, delegator_address: ADDR.exchange, staked_to_vault_atto: one(500), is_self_delegation: false, priority: true },
+  { validator_address: ADDR.v2, delegator_address: ADDR.exchangeSplit, staked_to_vault_atto: one(400), is_self_delegation: false, priority: true },
 ];
 
 export const vaults: VaultRow[] = [
@@ -229,15 +247,17 @@ export const vaults: VaultRow[] = [
     priority_staked_to_vault_atto: one(17_000), deferred_staked_to_vault_atto: one(5),
     delegation_rows: 5, governor_destination_id: null, governor_status: "ready",
     validator_name: "Fixture One", initial_assets_atto: one(14_000),
+    exchange_manual_assets_atto: "0",
     next_stage_assets_atto: "0", qualified_deferred_assets_atto: one(5),
     manual_review_assets_atto: "0", uncompiled_deferred_assets_atto: "0",
     not_issued_assets_atto: one(3000), post_policy_assets_atto: one(14_005),
   },
   {
-    validator_address: ADDR.v2, vault_assets_atto: one(22_500),
-    priority_staked_to_vault_atto: one(22_500), deferred_staked_to_vault_atto: "0",
-    delegation_rows: 3, governor_destination_id: null, governor_status: "hold",
+    validator_address: ADDR.v2, vault_assets_atto: one(23_400),
+    priority_staked_to_vault_atto: one(23_400), deferred_staked_to_vault_atto: "0",
+    delegation_rows: 5, governor_destination_id: null, governor_status: "hold",
     validator_name: null, initial_assets_atto: one(20_000),
+    exchange_manual_assets_atto: one(900),
     next_stage_assets_atto: "0", qualified_deferred_assets_atto: one(1500),
     manual_review_assets_atto: "0", uncompiled_deferred_assets_atto: "0",
     not_issued_assets_atto: one(1000), post_policy_assets_atto: one(21_500),
@@ -269,60 +289,123 @@ export const exceptions: ExceptionRow[] = [
   ex({ component: "wallet_airdrop", source_address: ADDR.partial, amount_atto: one(5000), exception_type: "explicit_route", destination_status: "not_issuing", destination_id: "not-issuing", reason: "not_issuing_blacklisted_extra_mint_recipient" }),
   ex({ component: "wallet_airdrop", source_address: ADDR.safe, amount_atto: one(50_000), exception_type: "contract_review_hold", destination_status: "hold", reason: "contract_review", source_category: "contract_review", route_priority: 1_000_000 }),
   ex({ component: "wallet_airdrop", source_address: ADDR.deducted, amount_atto: one(5000), exception_type: "explicit_route", destination_status: "not_issuing", destination_id: "not-issuing", reason: "not_issuing_burn_or_inaccessible", source_category: "excluded" }),
+  ...exchangeRoutes(ADDR.exchange, "exchange-okx", ADDR.okxDestination, 1500, ADDR.okxDestination, [[ADDR.v2, 500]]),
+  ...exchangeRoutes(ADDR.exchangeSplit, "exchange-binance", ADDR.binanceWallet, 700, ADDR.binanceStaking, [[ADDR.v2, 400]]),
+  ...exchangeRoutes(ADDR.gate, "exchange-gate", ADDR.gateDestination, 500),
+  ...exchangeRoutes(ADDR.gateInitial, null, ADDR.gateInitial, 5000),
 ];
 
+function exchangeRoutes(
+  source: string,
+  destinationId: string | null,
+  walletDestination: string,
+  walletAmount: number,
+  stakingDestination: string = walletDestination,
+  vault: Array<[string, number]> = [],
+): ExceptionRow[] {
+  const base = {
+    source_address: source,
+    source_category: "exchange_manual",
+    migration_stage: "exchange_manual",
+    issuance_treatment: "manual_from_reserve" as const,
+    exception_type: "explicit_route",
+    destination_status: "exchange_manual" as const,
+    reason: "exchange_manual_reserve_delivery",
+    route_priority: 300,
+  };
+  return [
+    ex({
+      ...base,
+      component: "wallet_airdrop",
+      amount_atto: one(walletAmount),
+      destination_id: destinationId,
+      destination_address: walletDestination,
+    }),
+    ...vault.map(([validator, amount]) =>
+      ex({
+        ...base,
+        component: "vault_shares",
+        validator_address: validator,
+        amount_atto: one(amount),
+        destination_id: destinationId,
+        destination_address: stakingDestination,
+      }),
+    ),
+  ];
+}
+
+function exchangeRow(p: Partial<ExchangeRow> & Pick<ExchangeRow, "exchange_id" | "display_name" | "address">): ExchangeRow {
+  return {
+    delivery_policy: "manual_from_reserve",
+    qualification_status: "qualified",
+    migration_stage: "exchange_manual",
+    issuance_treatment: "manual_from_reserve",
+    planned_delivery_status: "exchange_manual",
+    configured_destination: null,
+    configured_destination_status: "configured",
+    destination_mode: "aggregate",
+    delivery_tier: "aggregate",
+    planned_wallet_destination: null,
+    planned_staking_destination: null,
+    ...p,
+  };
+}
+
 export const exchangeWallets: ExchangeRow[] = [
-  {
+  exchangeRow({
     exchange_id: "gate",
     display_name: "Gate",
     address: ADDR.gate,
-    delivery_policy: "automatic_threshold",
     qualification_status: "below_threshold",
-    migration_stage: "below_threshold",
-    issuance_treatment: "issue",
-    planned_delivery_status: "below_threshold_not_airdropped",
-    configured_destination: null,
-    configured_destination_status: "not_required_same_address",
-  },
-  {
+    destination_mode: "tiered",
+    delivery_tier: "aggregated_non_initial",
+    configured_destination: ADDR.gateDestination,
+    planned_wallet_destination: ADDR.gateDestination,
+    planned_staking_destination: ADDR.gateDestination,
+  }),
+  exchangeRow({
+    exchange_id: "gate",
+    display_name: "Gate",
+    address: ADDR.gateInitial,
+    destination_mode: "tiered",
+    delivery_tier: "same_address_initial",
+    configured_destination: ADDR.gateDestination,
+    planned_wallet_destination: ADDR.gateInitial,
+    planned_staking_destination: ADDR.gateInitial,
+  }),
+  exchangeRow({
     exchange_id: "okx",
     display_name: "OKX",
     address: ADDR.exchange,
-    delivery_policy: "manual_current_claim",
-    qualification_status: "qualified",
-    migration_stage: "initial",
-    issuance_treatment: "issue",
-    planned_delivery_status: "manual_exchange_route",
-    configured_destination: ADDR.eoa,
-    configured_destination_status: "ready",
-  },
-  {
+    configured_destination: ADDR.okxDestination,
+    planned_wallet_destination: ADDR.okxDestination,
+    planned_staking_destination: ADDR.okxDestination,
+  }),
+  exchangeRow({
+    exchange_id: "binance",
+    display_name: "Binance",
+    address: ADDR.exchangeSplit,
+    destination_mode: "aggregate_split",
+    delivery_tier: "aggregate_split",
+    configured_destination: ADDR.binanceWallet,
+    planned_wallet_destination: ADDR.binanceWallet,
+    planned_staking_destination: ADDR.binanceStaking,
+  }),
+  exchangeRow({
     exchange_id: "mexc",
     display_name: "MEXC",
     address: ADDR.exchangeOnly,
-    delivery_policy: "manual_current_claim",
     qualification_status: "below_threshold",
-    migration_stage: "below_threshold",
-    issuance_treatment: "issue",
+    migration_stage: null,
     planned_delivery_status: "no_cutoff_claim",
     configured_destination: ADDR.eoa,
-    configured_destination_status: "ready",
-  },
-  {
-    exchange_id: "okx",
-    display_name: "OKX",
-    address: ADDR.exchangeDeferred,
-    delivery_policy: "manual_current_claim",
-    qualification_status: "qualified",
-    migration_stage: "deferred",
-    issuance_treatment: "issue",
-    planned_delivery_status: "deferred_stage_not_initial",
-    configured_destination: ADDR.eoa,
-    configured_destination_status: "ready",
-  },
+    planned_wallet_destination: ADDR.eoa,
+    planned_staking_destination: ADDR.eoa,
+  }),
 ];
 
 export const reasonTexts: Record<string, ReasonText> = {
+  exchange_manual_reserve_delivery: { title: "Sent separately by exchange arrangement", user_text: "not airdropped" },
   not_issuing_blacklisted_extra_mint_recipient: { title: "Deduction: extra-mint", user_text: "not returned" },
   not_issuing_burn_or_inaccessible: { title: "Deduction: inaccessible", user_text: "retained in reserve" },
   contract_review: { title: "Held: smart contract", user_text: "later phase" },

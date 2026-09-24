@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attoToOne, formatOne, hexToBech32, bech32ToHex } from "@hcp/shared";
+import { attoToOne, claimCanRequestConfirmation, formatOne, hexToBech32, bech32ToHex } from "@hcp/shared";
 import { buildClaimResponse, buildMeta } from "../src/claims.js";
 import { normalizeAddress, InvalidAddressError } from "../src/address.js";
 import { ADDR, MemoryRepository, ONE, snapshotMeta } from "./fixtures.js";
@@ -120,7 +120,8 @@ describe("claim lookup shape", () => {
     expect(Object.keys(r.wallet_airdrop!)).toEqual([
       "gross_atto", "gross_one", "not_issued_atto", "not_issued_one",
       "redistributed_atto", "redistributed_one", "held_atto", "held_one",
-      "net_atto", "net_one", "initial_stage_atto", "initial_stage_one",
+      "net_atto", "net_one", "manual_delivery_atto", "manual_delivery_one",
+      "initial_stage_atto", "initial_stage_one",
       "issuable_atto", "issuable_one", "destination",
     ]);
     const p = r.vault_positions[0];
@@ -233,30 +234,59 @@ describe("claim lookup shape", () => {
     expect(r.disposition?.code).toBe("not_issuing");
   });
 
-  it("routes non-Gate exchange wallets through the exchange", async () => {
+  it("sends an exchange wallet's whole entitlement to the exchange instead of the airdrop", async () => {
     const r = await lookup(ADDR.exchange);
     expect(r.disposition?.code).toBe("handled_by_exchange");
-    expect(r.disposition?.title).toBe("Initial stage — handled by OKX");
-    expect(r.disposition?.destination).toEqual({ address: ADDR.eoa, status: "ready" });
+    expect(r.disposition?.title).toBe("Handled by OKX");
+    expect(r.disposition?.detail).toMatch(/not part of the airdrop/);
+    expect(r.disposition?.detail).toMatch(/OKX's consolidation address/);
+    expect(r.disposition?.destination).toEqual({ address: ADDR.okxDestination, status: "exchange_manual" });
     expect(r.eligibility?.status).toBe("handled_by_exchange");
-  });
-
-  it("does not let a ready exchange destination promote a deferred stage", async () => {
-    const r = await lookup(ADDR.exchangeDeferred);
-    expect(r.migration_policy?.stage).toBe("deferred");
-    expect(r.disposition?.code).toBe("deferred");
+    expect(r.migration_policy?.stage).toBe("exchange_manual");
+    expect(r.migration_policy?.issuance_treatment).toBe("manual_from_reserve");
+    expect(r.migration_policy?.total_allocation_one).toBe("2000");
+    expect(r.wallet_airdrop?.manual_delivery_one).toBe("1500");
+    expect(r.wallet_airdrop?.initial_stage_atto).toBe("0");
     expect(r.wallet_airdrop?.issuable_atto).toBe("0");
-    expect(r.exchange_treatments[0].destination.status).toBe("ready");
+    expect(r.wallet_airdrop?.destination).toEqual({ address: ADDR.okxDestination, status: "exchange_manual" });
+    const p = r.vault_positions[0];
+    expect(p.manual_delivery_one).toBe("500");
+    expect(p.expected_shares_atto).toBe("0");
+    expect(p.initial_stage_shares_atto).toBe("0");
+    expect(p.status).toBe("exchange_manual");
+    expect(p.vault?.exchange_manual_assets_one).toBe("900");
+    expect(r.adjustments.map((a) => a.kind)).toEqual(["manual_delivery", "manual_delivery"]);
+    expect(r.adjustments[0].issuance_treatment).toBe("manual_from_reserve");
+    expect(r.notes.some((n) => /2,000 ONE is sent separately from the 2050 reserve as arranged with OKX/.test(n))).toBe(true);
+    expect(claimCanRequestConfirmation(r)).toBe(false);
   });
 
-  it("keeps Gate initial-stage status explicit without inventing an aggregate route", async () => {
+  it("sends split exchange components to the wallet and staking destinations", async () => {
+    const r = await lookup(ADDR.exchangeSplit);
+    expect(r.disposition?.detail).toMatch(/liquid balance to one Binance address and staked ONE, including rewards, to another/);
+    expect(r.exchange_treatments[0].destination).toEqual({ address: ADDR.binanceWallet, status: "exchange_manual" });
+    expect(r.exchange_treatments[0].staking_destination).toEqual({ address: ADDR.binanceStaking, status: "exchange_manual" });
+    expect(r.wallet_airdrop?.destination.address).toBe(ADDR.binanceWallet);
+    expect(r.vault_positions[0].destination).toEqual({ address: ADDR.binanceStaking, status: "exchange_manual" });
+  });
+
+  it("sends Gate wallets outside the initial criteria to Gate's consolidation address", async () => {
     const r = await lookup(ADDR.gate);
-    expect(r.eligibility?.status).toBe("deferred");
-    expect(r.disposition?.code).toBe("gate_deferred");
-    expect(r.disposition?.detail).toMatch(/no aggregate reroute/);
-    expect(r.wallet_airdrop?.issuable_atto).toBe("0");
-    expect(r.wallet_airdrop?.held_atto).toBe(r.wallet_airdrop?.net_atto);
-    expect(r.wallet_airdrop?.destination).toEqual({ address: null, status: "hold" });
+    expect(r.eligibility?.meets_threshold).toBe(false);
+    expect(r.eligibility?.status).toBe("handled_by_exchange");
+    expect(r.disposition?.detail).toMatch(/does not meet the initial airdrop criteria/);
+    expect(r.disposition?.destination).toEqual({ address: ADDR.gateDestination, status: "exchange_manual" });
+    expect(r.migration_policy?.total_allocation_one).toBe("500");
+    expect(r.notes.some((n) => /under the 1,000 ONE minimum/.test(n))).toBe(false);
+  });
+
+  it("sends Gate wallets that meet the initial criteria to their own address, outside the airdrop", async () => {
+    const r = await lookup(ADDR.gateInitial);
+    expect(r.disposition?.detail).toMatch(/meets the initial airdrop criteria/);
+    expect(r.disposition?.detail).toMatch(/this same address/);
+    expect(r.wallet_airdrop?.destination).toEqual({ address: ADDR.gateInitial, status: "exchange_manual" });
+    expect(r.wallet_airdrop?.initial_stage_atto).toBe("0");
+    expect(r.adjustments.map((a) => a.kind)).toEqual(["manual_delivery"]);
   });
 
   it("shows exchange identity without inventing entitlement for a no-claim row", async () => {
@@ -264,8 +294,10 @@ describe("claim lookup shape", () => {
     expect(r.found).toBe(false);
     expect(r.eligibility).toBeNull();
     expect(r.disposition?.code).toBe("exchange_no_claim");
+    expect(r.disposition?.title).toBe("MEXC wallet — nothing to deliver");
     expect(r.disposition?.destination).toEqual({ address: null, status: "none" });
     expect(r.exchange_treatments[0].destination).toEqual({ address: null, status: "none" });
+    expect(r.exchange_treatments[0].staking_destination).toBeNull();
   });
 
   it("uses dedicated next-stage wording for reviewed contract classes", async () => {
