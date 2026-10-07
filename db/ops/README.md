@@ -121,18 +121,46 @@ Prints every recorded signature with the wallet's amounts: the total not in
 the initial airdrop, split into the wallet part and vault shares; the balance
 components behind it (liquid per shard, pending undelegation, unclaimed
 reward, cross-shard, WONE); the vault shares per validator; last activity;
-signer; and the full signature. The header carries the report time (UTC and
+signer; and the full signature. Each record shows its confirmation `id` (the
+`#N` before the address is only a row number) and a `review` line: the
+approval decision, whether the wallet part was sent and by which run, and how
+many vault positions were sent. The header carries the report time (UTC and
 local), the database host without its password, and the loaded ledger and
 candidate versions. The summary counts by reason, category, version and
-review status, flags wallets that signed under a superseded candidate set or
-whose signer differs from the address, and gives the confirmed allocation as a
-share of the candidate set.
+decision, totals the wallet part and vault shares still pending and already
+sent, flags wallets that signed under a superseded candidate set or whose
+signer differs from the address, and gives the confirmed allocation as a share
+of the candidate set.
 
-`--csv` writes two files with the report timestamp in their names: one row per
-confirmation with atto and ONE amounts, the per-validator breakdown in a
-`vault_shares_breakdown` column, the signature and the signed message; and a
-companion `-vault-shares.csv` with one row per wallet and validator. The
-output prints the SHA-256 of the main file. `--out-dir` changes the directory.
+Filters select what is shown; the summary and the CSVs then cover only that:
+
+```sh
+db/ops/confirmed-wallets.sh --decision none --csv                       # still to review
+db/ops/confirmed-wallets.sh --decision approved --wallet pending --csv  # input for the next wallet batch
+db/ops/confirmed-wallets.sh --decision approved --vault pending --csv   # input for the next vault batch
+db/ops/confirmed-wallets.sh --run confirmed-wallets-1 --compact         # who that run paid
+```
+
+- `--decision none|approved|rejected` is per confirmation.
+- `--wallet pending|sent` and `--vault pending|partial|sent` are per wallet:
+  a wallet paid under one confirmation stays paid after it signs again under
+  a new data version. Wallets with nothing to send for a part match neither.
+- `--vault pending` means something is left to send, so it includes
+  `partial`; the vault-shares CSV then lists only the positions still to send.
+- `--run NAME` (repeatable) keeps wallets whose wallet part or any vault
+  position is currently marked sent by that run.
+
+The filtering is done by `confirmed-wallets.py` after one full extract, so a
+filtered run reads the same rows as an unfiltered one.
+
+`--csv` writes two files with the report timestamp, and the filters if any, in
+their names: one row per confirmation with atto and ONE amounts, the
+per-validator breakdown in a `vault_shares_breakdown` column, the review state
+(`decision`, `wallet_status`, `vault_status` and the runs), the signature and
+the signed message; and a companion `-vault-shares.csv` with one row per wallet
+and validator and its `sent_status` / `sent_run`. That file goes into
+`vault-batch build --input` as it is. The output prints the SHA-256 of both
+files. `--out-dir` changes the directory.
 
 Amounts come from the loaded ledger, so they reflect the current
 `snapshot_meta.data_version`, not the version the wallet signed under; the
@@ -140,17 +168,72 @@ Amounts come from the loaded ledger, so they reflect the current
 owner role because it reads schema `confirm` and the public ledger in one
 pass, which neither runtime role can do. The database URL is never printed.
 
-## Export, review, backup
+## Approving and marking deliveries
+
+`record-review.sh` appends rows to `confirm.reviews` as the owner role. It never
+updates or deletes a row and does not touch the ledger or the schema. Without
+`--apply` it only prints the plan and saves it under `data/reviews/`; with
+`--apply` it writes every planned row in one transaction, or none. It opens
+the same tunnel as `confirmed-wallets.sh` (`--no-tunnel`, `--db-url` as there).
+
+```sh
+# 1. review: export what is undecided, keep the rows you approve
+db/ops/confirmed-wallets.sh --decision none --csv
+db/ops/record-review.sh --approve --from-csv approved.csv --label approved-1           # prints the plan
+db/ops/record-review.sh --approve --from-csv approved.csv --label approved-1 --apply
+db/ops/record-review.sh --reject --confirmation-id 15 --note "reason"
+
+# 2. after a run's Safe transactions have executed, mark what it paid
+db/ops/record-review.sh --sent wallet --from-run ~/git/harmony-migration/airdrop/runs/confirmed-wallets-1 --apply
+db/ops/record-review.sh --sent vault --from-run ~/git/harmony-migration/airdrop/runs/vaults-pilot-1 --apply
+db/ops/record-review.sh --sent wallet --from-run …/confirmed-wallets-2 --transaction 1 --apply   # one Safe tx so far
+
+# 3. undo a run's marks, for example for a transaction that did not execute
+db/ops/record-review.sh --unsent wallet --run confirmed-wallets-2 --note "tx 2 replaced" --apply
+```
+
+- **Inputs.** `--from-csv` reads an `id` column, an `address` column, or both
+  (then they must agree), so a `confirmed-wallets` export works as it is.
+  `--sent` reads the run directory itself: `recipients.csv` of a `safe-batch`
+  run, `deposits.csv` of a `vault-batch` run, or the per-transaction lists for
+  `--transaction`. Each list must match its SHA-256 in `manifest.json`.
+- **Approve** refuses confirmations signed under a superseded candidate set,
+  a signer that differs from the address, and addresses missing from the
+  ledger. Already approved confirmations are left out.
+- **Sent** refuses a wallet that is not approved, an amount that differs from
+  the ledger (`wallet_allocation_atto` for the wallet part, the vault shares
+  for that validator), a delivery already marked sent by another run (a
+  double payment), and a run name already recorded from a different
+  `manifest.json`. Rows already recorded for the same run are left out, so
+  marking a run again is safe. Addresses without a confirmation, such as
+  initial-stage delegators in a vault run, are counted and left out.
+- **Run names identify batches.** The batch id is built from the run
+  directory's name, so give every batch its own directory, with a sequence
+  number: `confirmed-wallets-1`, `confirmed-wallets-2`, `vaults-pilot-1`,
+  `vaults-3`. Each row also stores the run's `manifest.json` SHA-256.
+- **Concurrent changes.** The apply step locks `confirm.reviews` and stops if
+  any review row was added since the plan was made.
+- **It does not read the chain.** Run `--sent` after the transactions have
+  executed and, for vaults, after `vault-batch reconcile` passed.
+
+How the rows read back (`db/ops/review_tracks.py`): `batch_id`
+`wallet:<run>` is the wallet part, `vault:<run>:<validator>` the vault shares
+with one validator, anything else an approval decision with an optional label.
+Status `queued` on a decision means approved, `rejected` rejected; `included`
+on a wallet or vault row means sent, `queued` there means undone. The latest
+row of each kind wins. Rows that do not parse are counted in the report's
+summary and otherwise ignored, so write rows with this script, not by hand.
+
+## Export and backup
 
 ```sh
 db/ops/export-confirmations.sh --out data/confirm-export --dsn "$CONFIRM_OWNER_URL"
-db/ops/record-review.sh --confirmation-id 15 --status queued --batch-id later-1 --dsn "$CONFIRM_OWNER_URL"
 db/ops/backup-confirm.sh --dsn "$CONFIRM_OWNER_URL"
 ```
 
-`data/` is gitignored. `confirmations.csv` includes `id`, which
-`record-review.sh --confirmation-id` uses. The export manifest is the SHA-256
-of that CSV. Recover each signature before using the file.
+`data/` is gitignored. `confirmations.csv` includes `id`; `reviews.csv` has
+every review row. The export manifest is the SHA-256 of `confirmations.csv`.
+Recover each signature before using the file.
 
 ## Verifying a signature
 
