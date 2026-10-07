@@ -361,6 +361,7 @@ class Planner:
                 expected = c.wallet_allocation
                 prior = self.state.wallet_sent(c.address)
                 batch = rt.wallet_batch_id(run.name)
+                blocked = c.wallet_destination if c.wallet_status == "blocked" else ""
             else:
                 position = next((v for v in c.vaults if v.validator_address == item.validator), None)
                 if position is None:
@@ -370,6 +371,11 @@ class Planner:
                 expected = position.expected_shares
                 prior = self.state.vault_sent(c.address, item.validator)
                 batch = rt.vault_batch_id(run.name, item.validator)
+                blocked = position.block_reason if position.status == "blocked" else ""
+            if blocked:
+                self.problems.append(f"{item.where}: {c.address}: its {what} not deliverable to the wallet itself "
+                                     f"({blocked}); a batch must not have paid it")
+                continue
             if item.amount != expected:
                 self.problems.append(f"{item.where}: the run pays {c.address} {one(item.amount)} ONE; in the ledger "
                                      f"its {what} {one(expected)} ONE")

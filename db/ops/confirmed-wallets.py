@@ -88,12 +88,14 @@ CSV_COLUMNS = [
     "decision_label",
     "decision_at_utc",
     "decision_note",
+    "wallet_destination_status",
     "wallet_status",
     "wallet_sent_run",
     "wallet_sent_at_utc",
     "vault_status",
     "vault_positions_sent",
     "vault_positions_pending",
+    "vault_positions_blocked",
     "vault_pending_atto",
     "vault_pending_one",
     "vault_sent_runs",
@@ -102,9 +104,11 @@ CSV_COLUMNS = [
     "message",
 ]
 
-# vault-batch reads this file by column name (address, validator_address,
-# expected_shares_atto); new columns must not reuse its candidate names such as
-# amount_atto, delegator_address or destination_status.
+# vault-batch reads this file by column name: address, validator_address and
+# expected_shares_atto, and it refuses non-zero rows whose destination_status is
+# not ready or that are not approved and pending (decision, sent_status). New
+# columns must not reuse its other candidate names, such as amount_atto or
+# delegator_address. db/ops/test_airdrop_compat.py runs this file through it.
 VAULT_CSV_COLUMNS = [
     "address",
     "validator_address",
@@ -114,19 +118,23 @@ VAULT_CSV_COLUMNS = [
     "not_issued_one",
     "redistributed_one",
     "held_one",
+    "manual_delivery_one",
     "expected_shares_atto",
     "expected_shares_one",
     "is_self_delegation",
     "priority",
     "governor_status",
+    "destination_status",
+    "decision",
     "sent_status",
+    "blocked_reason",
     "sent_run",
     "sent_at_utc",
 ]
 
 DECISIONS = ("none", "approved", "rejected")
-WALLET_FILTERS = ("pending", "sent")
-VAULT_FILTERS = ("pending", "partial", "sent")
+WALLET_FILTERS = ("pending", "sent", "blocked")
+VAULT_FILTERS = ("pending", "partial", "sent", "blocked")
 
 
 # ---------------------------------------------------------------- amounts
@@ -197,27 +205,52 @@ def read_rows(path: Optional[str]) -> List[Dict[str, str]]:
 
 
 class Adjustments:
-    """routing_exceptions split the way backend/src/claims.ts splitExceptions does."""
+    """routing_exceptions of one wallet part or vault position, split the way
+    backend/src/claims.ts splitExceptions does."""
 
     def __init__(self) -> None:
         self.not_issued = 0
         self.redistributed = 0
         self.held = 0
+        self.manual = 0  # exchange_manual: delivered separately by the exchange arrangement
+        self.destinations: Set[str] = set()  # destination addresses of ready routes
 
-    def add(self, status: str, amount: int) -> None:
+    def add(self, status: str, amount: int, destination: str = "") -> None:
         if status == "not_issuing":
             self.not_issued += amount
         elif status == "redistributed":
             self.redistributed += amount
         elif status == "hold":
             self.held += amount
+        elif status == "exchange_manual":
+            self.manual += amount
+        elif status == "ready" and destination:
+            self.destinations.add(destination)
 
-    def net(self, gross: int) -> int:
-        value = gross - self.not_issued - self.redistributed
+    def net(self, gross: int, less_manual: bool = False) -> int:
+        """The lookup API's net: the wallet part keeps manual delivery in it, vault shares do not."""
+        value = gross - self.not_issued - self.redistributed - (self.manual if less_manual else 0)
         return value if value > 0 else 0
 
+    def delivery(self, gross: int, address: str) -> str:
+        """'ready' when a batch may send all of the part to `address` itself, otherwise why not:
+        redirect (a route to another address), hold, exchange_manual, or nothing left to send
+        (none, not_issuing, redistributed). Stricter than the lookup API, which also calls a
+        partly held or partly redirected part ready."""
+        if gross <= 0:
+            return "none"
+        if any(d != address for d in self.destinations):
+            return "redirect"
+        if self.held:
+            return "hold"
+        if self.manual:
+            return "exchange_manual"
+        if gross - self.not_issued - self.redistributed > 0:
+            return "ready"
+        return "redistributed" if self.redistributed and not self.not_issued else "not_issuing"
+
     def any(self) -> bool:
-        return bool(self.not_issued or self.redistributed or self.held)
+        return bool(self.not_issued or self.redistributed or self.held or self.manual)
 
 
 def index_exceptions(rows: Iterable[Dict[str, str]]):
@@ -227,11 +260,12 @@ def index_exceptions(rows: Iterable[Dict[str, str]]):
         address = row["address"].strip().lower()
         amount = to_int(row.get("amount_atto"))
         status = (row.get("destination_status") or "").strip()
+        destination = (row.get("destination_address") or "").strip().lower()
         if row.get("component") == "wallet_airdrop":
-            wallet[address].add(status, amount)
+            wallet[address].add(status, amount, destination)
         elif row.get("component") == "vault_shares":
             validator = (row.get("validator_address") or "").strip().lower()
-            vault[(address, validator)].add(status, amount)
+            vault[(address, validator)].add(status, amount, destination)
     return wallet, vault
 
 
@@ -245,12 +279,23 @@ class VaultPosition:
         self.priority = pg_bool(row.get("priority")) or False
         self.governor_status = (row.get("governor_status") or "").strip()
         self.adjustments = adjustments
-        self.expected_shares = adjustments.net(self.staked)
-        # "none" (nothing to send), "pending" or "sent"; set by apply_reviews.
-        self.status = "none" if self.expected_shares <= 0 else "pending"
+        self.expected_shares = adjustments.net(self.staked, less_manual=True)
+        self.destination = adjustments.delivery(self.staked, self.address)
+        # "none" (nothing to send), "blocked" (block_reason), "pending" or "sent"; sent is set by apply_reviews.
+        self.block_reason = ""
+        if self.expected_shares <= 0:
+            self.status = "none"
+        elif self.destination != "ready":
+            self.status, self.block_reason = "blocked", self.destination
+        else:
+            self.status = "pending"
         self.sent: Optional[rt.Review] = None
 
-    def csv_row(self) -> Dict[str, str]:
+    def block(self, reason: str) -> None:
+        if self.status == "pending":
+            self.status, self.block_reason = "blocked", reason
+
+    def csv_row(self, decision: str = "") -> Dict[str, str]:
         return {
             "address": self.address,
             "validator_address": self.validator_address,
@@ -260,12 +305,16 @@ class VaultPosition:
             "not_issued_one": atto_to_one(self.adjustments.not_issued),
             "redistributed_one": atto_to_one(self.adjustments.redistributed),
             "held_one": atto_to_one(self.adjustments.held),
+            "manual_delivery_one": atto_to_one(self.adjustments.manual),
             "expected_shares_atto": str(self.expected_shares),
             "expected_shares_one": atto_to_one(self.expected_shares),
             "is_self_delegation": yes_no(self.is_self),
             "priority": yes_no(self.priority),
             "governor_status": self.governor_status,
+            "destination_status": self.destination,
+            "decision": decision,
             "sent_status": self.status,
+            "blocked_reason": self.block_reason,
             "sent_run": self.sent.run if self.sent else "",
             "sent_at_utc": self.sent.reviewed_at if self.sent else "",
         }
@@ -315,6 +364,16 @@ class Confirmation:
         self.qualification_total = amt("qualification_total_atto")
         self.total_claim = amt("total_claim_atto")
 
+        # The wallet part is paid from the ledger's allocation; its routes only decide whether a
+        # batch may pay it to the wallet itself.
+        self.wallet_destination = wallet_adjustments.delivery(self.wallet_gross or self.wallet_allocation, self.address)
+        # The export's vault shares must add up to the ledger's vault allocation; when they do
+        # not, the portal's arithmetic and the pipeline disagree and no position may be sent.
+        self.vault_ledger_mismatch = self.in_ledger and sum(v.expected_shares for v in vaults) != self.vault_allocation
+        if self.vault_ledger_mismatch:
+            for v in vaults:
+                v.block("ledger mismatch")
+
         # Set by apply_reviews; without reviews every confirmation is undecided.
         self.decision = "none"
         self.decision_review: Optional[rt.Review] = None
@@ -323,6 +382,8 @@ class Confirmation:
             self.wallet_status = "unknown"
         elif self.wallet_allocation <= 0:
             self.wallet_status = "none"
+        elif self.wallet_destination != "ready":
+            self.wallet_status = "blocked"
         else:
             self.wallet_status = "pending"
 
@@ -331,17 +392,21 @@ class Confirmation:
         return self.signer == self.address
 
     def live_vaults(self) -> List[VaultPosition]:
-        """Positions with shares to send."""
-        return [v for v in self.vaults if v.status != "none"]
+        """Positions a batch may send, or has sent."""
+        return [v for v in self.vaults if v.status in ("pending", "sent")]
+
+    def blocked_vaults(self) -> List[VaultPosition]:
+        return [v for v in self.vaults if v.status == "blocked"]
 
     @property
     def vault_status(self) -> str:
-        """unknown, none (nothing to send), pending (none sent), partial, or sent."""
+        """unknown, none (nothing to send), blocked (only blocked positions), pending (none sent),
+        partial, or sent. Blocked positions do not count towards pending, partial or sent."""
         if not self.in_ledger:
             return "unknown"
         live = self.live_vaults()
         if not live:
-            return "none"
+            return "blocked" if self.blocked_vaults() else "none"
         sent = sum(1 for v in live if v.status == "sent")
         if sent == 0:
             return "pending"
@@ -369,18 +434,24 @@ class Confirmation:
             "unknown": "wallet unknown",
             "none": "wallet nothing to send",
             "pending": "wallet pending",
+            "blocked": f"wallet blocked ({self.wallet_destination})",
         }.get(self.wallet_status, "")
         if self.wallet_status == "sent" and self.wallet_review:
             wallet = f"wallet sent by {self.wallet_review.run}"
-        live = self.live_vaults()
+        live, blocked = self.live_vaults(), self.blocked_vaults()
         status = self.vault_status
         if status == "unknown":
             vault = "vault unknown"
         elif status == "none":
             vault = "vault nothing to send"
         else:
-            sent = sum(1 for v in live if v.status == "sent")
-            vault = f"vault {sent} of {len(live)} sent"
+            parts = []
+            if live:
+                parts.append(f"{sum(1 for v in live if v.status == 'sent')} of {len(live)} sent")
+            if blocked:
+                reasons = ", ".join(sorted({v.block_reason for v in blocked}))
+                parts.append(f"{len(blocked)} blocked ({reasons})")
+            vault = "vault " + ", ".join(parts)
         return " | ".join((decision, wallet, vault))
 
     def vault_breakdown_text(self) -> str:
@@ -435,12 +506,14 @@ class Confirmation:
             "decision_label": self.decision_review.label if self.decision_review else "",
             "decision_at_utc": self.decision_review.reviewed_at if self.decision_review else "",
             "decision_note": self.decision_review.note if self.decision_review else "",
+            "wallet_destination_status": self.wallet_destination,
             "wallet_status": self.wallet_status,
             "wallet_sent_run": self.wallet_review.run if self.wallet_review else "",
             "wallet_sent_at_utc": self.wallet_review.reviewed_at if self.wallet_review else "",
             "vault_status": self.vault_status,
             "vault_positions_sent": str(sum(1 for v in self.vaults if v.status == "sent")),
             "vault_positions_pending": str(sum(1 for v in self.vaults if v.status == "pending")),
+            "vault_positions_blocked": str(len(self.blocked_vaults())),
             "vault_pending_atto": str(self.vault_pending_amount()),
             "vault_pending_one": one(self.vault_pending_amount()),
             "vault_sent_runs": ";".join(sorted({v.sent.run for v in self.vaults if v.sent})),
@@ -469,16 +542,19 @@ def build(
 
 
 def apply_reviews(items: List[Confirmation], state: rt.ReviewState) -> None:
+    """A part marked sent stays sent even if a later data version blocks it."""
     for c in items:
         c.decision, c.decision_review = state.decision_of(c.id)
-        if c.wallet_status in ("pending", "sent"):
+        if c.wallet_status in ("pending", "blocked", "sent"):
             c.wallet_review = state.wallet_sent(c.address)
-            c.wallet_status = "sent" if c.wallet_review else "pending"
+            if c.wallet_review:
+                c.wallet_status = "sent"
         for v in c.vaults:
             if v.status == "none":
                 continue
             v.sent = state.vault_sent(c.address, v.validator_address)
-            v.status = "sent" if v.sent else "pending"
+            if v.sent:
+                v.status = "sent"
 
 
 def select(
@@ -499,31 +575,36 @@ def select(
             continue
         if vault in ("partial", "sent") and c.vault_status != vault:
             continue
+        if vault == "blocked" and not c.blocked_vaults():
+            continue
         if wanted_runs and not (wanted_runs & c.sent_runs()):
             continue
         out.append(c)
     return out
 
 
-def vault_rows(items: List[Confirmation], vault: Optional[str]) -> List[VaultPosition]:
-    """Positions for the vault-shares CSV, once per wallet and validator even when a
-    wallet signed under two data versions; only those still to send under
-    --vault pending|partial."""
-    seen, out = set(), []
+def vault_rows(items: List[Confirmation], vault: Optional[str]) -> List[tuple]:
+    """(confirmation, position) pairs for the vault-shares CSV, once per wallet and validator even
+    when a wallet signed under two data versions (the current confirmation's decision is the
+    one written); only positions still to send under --vault pending|partial, only blocked ones
+    under --vault blocked."""
+    chosen: Dict[tuple, tuple] = {}
     for c in items:
         for v in c.vaults:
-            key = (v.address, v.validator_address)
-            if key in seen or (vault in ("pending", "partial") and v.status != "pending"):
+            if vault in ("pending", "partial") and v.status != "pending":
                 continue
-            seen.add(key)
-            out.append(v)
-    return out
+            if vault == "blocked" and v.status != "blocked":
+                continue
+            key = (v.address, v.validator_address)
+            if key not in chosen or (c.still_candidate and not chosen[key][0].still_candidate):
+                chosen[key] = (c, v)
+    return list(chosen.values())
 
 
 # ---------------------------------------------------------------- stats
 
 
-STATUS_ORDER = ("pending", "partial", "sent", "none", "unknown")
+STATUS_ORDER = ("pending", "partial", "sent", "blocked", "none", "unknown")
 STATUS_WORDS = {"none": "nothing to send"}
 
 
@@ -570,6 +651,11 @@ class Stats:
             for v in c.vaults:
                 self.position_count[v.status] += 1
                 self.position_amount[v.status] += v.expected_shares
+        self.blocked_reasons = Counter(
+            [f"wallet {c.wallet_destination}" for c in latest.values() if c.wallet_status == "blocked"]
+            + [f"vault {v.block_reason}" for c in latest.values() for v in c.vaults if v.status == "blocked"]
+        )
+        self.vault_ledger_mismatch = sum(1 for c in latest.values() if c.vault_ledger_mismatch)
 
         self.unrecognised_reviews = len(state.unrecognised) if state else 0
         self.approvals_as_included = state.approvals_stored_as_included() if state else 0
@@ -664,6 +750,8 @@ def render_record(index: int, c: Confirmation) -> List[str]:
                 parts.append(f"redistributed -{format_one(adj.redistributed)}")
             if adj.held:
                 parts.append(f"held {format_one(adj.held)}")
+            if adj.manual:
+                parts.append(f"exchange delivery {format_one(adj.manual)}")
             wallet_line += f" | {' | '.join(parts)} | net {format_one(c.wallet_net)}"
         lines.append(wallet_line)
         if c.vaults:
@@ -681,6 +769,8 @@ def render_record(index: int, c: Confirmation) -> List[str]:
                     extra.append(f"shares {format_one(v.expected_shares)}")
                 if v.sent:
                     extra.append(f"sent by {v.sent.run}")
+                elif v.status == "blocked":
+                    extra.append(f"blocked: {v.block_reason}")
                 name = f"  {v.validator_name}" if v.validator_name else ""
                 tail = f"  ({', '.join(extra)})" if extra else ""
                 lines.append(f"{pad}              {format_one(v.staked):>14} ONE  {v.validator_address}{name}{tail}")
@@ -761,6 +851,17 @@ def render_stats(stats: Stats) -> List[str]:
     lines.append("  wallet part             " + status_counts(stats.wallet_count, stats.wallet_amount, "wallet"))
     if stats.vault_positions:
         lines.append("  vault shares            " + status_counts(stats.position_count, stats.position_amount, "position"))
+    if stats.blocked_reasons:
+        lines.append(
+            "  blocked                 "
+            + " | ".join(f"{reason} {n:,}" for reason, n in sorted(stats.blocked_reasons.items()))
+            + "   (not deliverable to the wallet itself; left out of pending exports)"
+        )
+    if stats.vault_ledger_mismatch:
+        lines.append(
+            f"  vault vs ledger         {stats.vault_ledger_mismatch:,} wallet(s) whose vault shares do not add up to "
+            "the ledger's vault allocation; their positions are blocked"
+        )
     if stats.approvals_as_included:
         lines.append(
             f"  note                    {stats.approvals_as_included:,} approval(s) are stored as 'included' without "
@@ -829,8 +930,8 @@ def export_csv(
     main = out_dir / f"confirmed-wallets-{stamp}{suffix}.csv"
     vaults = out_dir / f"confirmed-wallets-{stamp}{suffix}-vault-shares.csv"
     main_rows = write_csv(main, CSV_COLUMNS, (c.csv_row() for c in items))
-    position_rows = write_csv(vaults, VAULT_CSV_COLUMNS, (v.csv_row() for v in vault_rows(items, vault)))
-    which = "still to send, " if vault in ("pending", "partial") else ""
+    position_rows = write_csv(vaults, VAULT_CSV_COLUMNS, (v.csv_row(c.decision) for c, v in vault_rows(items, vault)))
+    which = {"pending": "still to send, ", "partial": "still to send, ", "blocked": "blocked, "}.get(vault or "", "")
     return [
         "CSV",
         f"  {main}",
@@ -852,9 +953,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--candidates", help="CSV extract of confirm.candidates totals per version")
     parser.add_argument("--reviews", help="CSV extract of every confirm.reviews row, in (reviewed_at, id) order")
     parser.add_argument("--decision", choices=DECISIONS, help="only confirmations with this approval decision")
-    parser.add_argument("--wallet", choices=WALLET_FILTERS, help="only wallets whose wallet part is pending or sent")
+    parser.add_argument("--wallet", choices=WALLET_FILTERS,
+                        help="only wallets whose wallet part is pending, sent, or blocked (not deliverable to the "
+                             "wallet itself)")
     parser.add_argument("--vault", choices=VAULT_FILTERS,
-                        help="pending: some vault shares still to send (includes partial); partial; sent: all sent")
+                        help="pending: some vault shares still to send (includes partial); partial; sent: all "
+                             "deliverable shares sent; blocked: some position not deliverable to the wallet itself")
     parser.add_argument("--run", action="append", default=[],
                         help="only wallets with a wallet part or vault shares marked sent by this run (repeatable)")
     parser.add_argument("--ledger-data-version", default="", help="snapshot_meta.data_version of the loaded ledger")
