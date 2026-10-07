@@ -245,6 +245,30 @@ class SentVaultTests(PlannerCase):
                          [(ALICE, f"vault:vaults-pilot-1:{VAL1}", "300")])
         self.assertIn("1 deposit, 70 ONE, to addresses without a confirmation", text)
 
+    def test_blocked_positions_cannot_be_marked(self):
+        run = vault_run(self.dir / "vaults-4", [(VAL1, ALICE, 300)])
+        d = self.dir
+        write_rows(d / "exceptions-held.csv", ["address", "component", "validator_address", "destination_status",
+                                               "destination_address", "amount_atto"],
+                   [{"address": ALICE, "component": "vault_shares", "validator_address": VAL1,
+                     "destination_status": "hold", "destination_address": "", "amount_atto": str(ONE)}])
+        code, _, text = self.plan_with_exceptions(d / "exceptions-held.csv", "--sent", "vault", "--from-run", str(run))
+        self.assertEqual(code, 2)
+        self.assertIn("vault shares with " + VAL1 + " are not deliverable to the wallet itself (hold)", text)
+
+    def plan_with_exceptions(self, exceptions, *flags):
+        d = self.dir
+        write_rows(d / "confirmations.csv", list(self.confirmations[0].keys()), self.confirmations)
+        write_rows(d / "vault-shares.csv", list(self.positions[0].keys()), self.positions)
+        write_rows(d / "reviews.csv", ["id", "confirmation_id", "address", "status", "batch_id", "note",
+                                       "reviewed_at_utc"], self.approved)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = rr.main(["--confirmations", str(d / "confirmations.csv"), "--vault-shares", str(d / "vault-shares.csv"),
+                            "--exceptions", str(exceptions), "--reviews", str(d / "reviews.csv"),
+                            "--plan-out", str(d / "plan.csv"), "--meta-out", str(d / "meta"), *flags])
+        return code, None, out.getvalue() + err.getvalue()
+
     def test_deploy_transactions_and_unknown_positions(self):
         run = vault_run(self.dir / "vaults-pilot-1", [(VAL1, ALICE, 300)])
         code, _, text = self.plan("--sent", "vault", "--from-run", str(run), "--transaction", "1",

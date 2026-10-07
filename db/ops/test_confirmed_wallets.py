@@ -281,7 +281,8 @@ class FilterTests(unittest.TestCase):
                 confirmation(),
                 confirmation(id="2", address=BOB, signer=BOB, migration_staked_to_vault_atto="0"),
                 confirmation(id="3", address="0x" + "cc" * 20, signer="0x" + "cc" * 20,
-                             migration_wallet_allocation_atto="0", wallet_airdrop_atto="0"),
+                             migration_wallet_allocation_atto="0", wallet_airdrop_atto="0",
+                             migration_staked_to_vault_atto=str(50 * ONE)),
             ],
             [vault(), vault(validator=VAL2, staked=200 * ONE), vault(address="0x" + "cc" * 20, staked=50 * ONE)],
             [],
@@ -322,10 +323,11 @@ class FilterTests(unittest.TestCase):
     def test_vault_rows_keep_only_positions_still_to_send(self):
         approved = mod.select(self.items, decision="approved", vault="pending")
         rows = mod.vault_rows(approved, "pending")
-        self.assertEqual([(v.address, v.validator_address) for v in rows], [(ALICE, VAL2)])
+        self.assertEqual([(v.address, v.validator_address) for _, v in rows], [(ALICE, VAL2)])
         self.assertEqual(len(mod.vault_rows(approved, None)), 2)
-        sent = [v.csv_row() for v in mod.vault_rows(approved, None) if v.status == "sent"]
-        self.assertEqual(sent[0]["sent_run"], "vaults-pilot-1")
+        sent = [v.csv_row(c.decision) for c, v in mod.vault_rows(approved, None) if v.status == "sent"]
+        self.assertEqual((sent[0]["sent_run"], sent[0]["decision"], sent[0]["destination_status"]),
+                         ("vaults-pilot-1", "approved", "ready"))
 
     def test_stats_split_by_status(self):
         stats = mod.Stats(self.items, [], self.state)
@@ -339,6 +341,85 @@ class FilterTests(unittest.TestCase):
         self.assertIn("wallet part             pending 1 wallet (1,000 ONE) | sent 1 wallet (1,000 ONE) | "
                       "nothing to send 1", text)
         self.assertIn("vault shares            pending 2 positions (250 ONE) | sent 1 position (300 ONE)", text)
+
+
+def exception(address, component, status, amount, validator="", destination=""):
+    return {"address": address, "component": component, "validator_address": validator,
+            "destination_status": status, "destination_address": destination, "amount_atto": str(amount)}
+
+
+class DeliveryTests(unittest.TestCase):
+    """What a batch may send, compared with backend/src/claims.ts."""
+
+    def build(self, exceptions, **kwargs):
+        positions = [vault(), vault(validator=VAL2, staked=200 * ONE)]
+        items = mod.build([confirmation(**kwargs)], positions, exceptions)
+        mod.apply_reviews(items, mod.rt.ReviewState([]))
+        return items[0]
+
+    def test_exchange_manual_is_subtracted_from_vault_shares_like_the_lookup_api(self):
+        c = self.build([exception(ALICE, "vault_shares", "exchange_manual", 200 * ONE, VAL2, BOB)],
+                       migration_staked_to_vault_atto=str(300 * ONE), migration_allocation_atto=str(1300 * ONE))
+        second = c.vaults[1]
+        self.assertEqual((second.expected_shares, second.status, second.destination), (0, "none", "exchange_manual"))
+        self.assertEqual(c.vault_status, "pending")
+        self.assertFalse(c.vault_ledger_mismatch)
+
+    def test_partly_exchange_manual_or_held_positions_are_blocked(self):
+        c = self.build([exception(ALICE, "vault_shares", "exchange_manual", 50 * ONE, VAL2, BOB),
+                        exception(ALICE, "vault_shares", "hold", 100 * ONE, VAL1)],
+                       migration_staked_to_vault_atto=str(450 * ONE), migration_allocation_atto=str(1450 * ONE))
+        first, second = c.vaults
+        self.assertEqual((first.status, first.block_reason, first.expected_shares), ("blocked", "hold", 300 * ONE))
+        self.assertEqual((second.status, second.block_reason, second.expected_shares),
+                         ("blocked", "exchange_manual", 150 * ONE))
+        self.assertEqual(c.vault_status, "blocked")
+        self.assertIn("vault 2 blocked (exchange_manual, hold)", c.review_text())
+
+    def test_redirects_block_and_same_address_routes_do_not(self):
+        c = self.build([exception(ALICE, "vault_shares", "ready", 300 * ONE, VAL1, ALICE),
+                        exception(ALICE, "vault_shares", "ready", 200 * ONE, VAL2, BOB),
+                        exception(ALICE, "wallet_airdrop", "ready", 1000 * ONE, "", ALICE)])
+        first, second = c.vaults
+        self.assertEqual((first.status, first.destination), ("pending", "ready"))
+        self.assertEqual((second.status, second.block_reason), ("blocked", "redirect"))
+        self.assertEqual(c.wallet_status, "pending")
+
+    def test_wallet_part_on_hold_or_redirected_is_blocked(self):
+        held = self.build([exception(ALICE, "wallet_airdrop", "hold", 10 * ONE)])
+        self.assertEqual((held.wallet_status, held.wallet_destination), ("blocked", "hold"))
+        moved = self.build([exception(ALICE, "wallet_airdrop", "ready", 1000 * ONE, "", BOB)])
+        self.assertEqual((moved.wallet_status, moved.wallet_destination), ("blocked", "redirect"))
+        self.assertIn("wallet blocked (redirect)", moved.review_text())
+
+    def test_not_issued_shares_are_subtracted_and_nothing_blocks(self):
+        c = self.build([exception(ALICE, "vault_shares", "not_issuing", 200 * ONE, VAL2)],
+                       migration_staked_to_vault_atto=str(300 * ONE), migration_allocation_atto=str(1300 * ONE))
+        self.assertEqual([(v.status, v.destination) for v in c.vaults], [("pending", "ready"), ("none", "not_issuing")])
+
+    def test_vault_shares_that_disagree_with_the_ledger_are_blocked(self):
+        c = self.build([], migration_staked_to_vault_atto=str(400 * ONE), migration_allocation_atto=str(1400 * ONE))
+        self.assertTrue(c.vault_ledger_mismatch)
+        self.assertEqual([(v.status, v.block_reason) for v in c.vaults], [("blocked", "ledger mismatch")] * 2)
+        self.assertEqual(mod.vault_rows([c], "pending"), [])
+        stats = mod.Stats([c], [])
+        text = "\n".join(mod.render_stats(stats))
+        self.assertIn("vault ledger mismatch 2", text)
+        self.assertIn("1 wallet(s) whose vault shares do not add up to the ledger's vault allocation", text)
+
+    def test_sent_marks_survive_a_later_block(self):
+        items = mod.build([confirmation()], [vault(), vault(validator=VAL2, staked=200 * ONE)],
+                          [exception(ALICE, "vault_shares", "hold", 1, VAL1)])
+        mod.apply_reviews(items, mod.rt.ReviewState([review(1, 1, ALICE, "included", f"vault:vaults-1:{VAL1}")]))
+        self.assertEqual(items[0].vaults[0].status, "sent")
+
+    def test_the_current_confirmation_decides_a_repeat_signers_rows(self):
+        items = mod.build(
+            [confirmation(id="1", still_candidate="f", data_version="2026-09-01"), confirmation(id="2")],
+            [vault(), vault(validator=VAL2, staked=200 * ONE)], [])
+        mod.apply_reviews(items, mod.rt.ReviewState([review(1, 2, ALICE, "queued")]))
+        rows = mod.vault_rows(items, None)
+        self.assertEqual([(c.id, c.decision) for c, _ in rows], [("2", "approved"), ("2", "approved")])
 
 
 class EndToEndTests(unittest.TestCase):
