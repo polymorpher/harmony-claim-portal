@@ -11,7 +11,13 @@
 # /etc/harmony-claim-api.env (lookup, no owner URL) and
 # /etc/harmony-claim-confirm.env. Passwords are generated on this host and are
 # not printed. Re-running keeps an existing password when its env file is still
-# present.
+# present, and keeps CONFIRM_BACKUP_BUCKET in the migrate env unless
+# --backup-bucket names another one.
+#
+# --rotate-owner (with --vm) gives the owner role claimapi a new password and
+# writes it to the migrate env, for example after the old one was exposed:
+#   sudo db/ops/setup-roles.sh --vm --db-name claims --domain migrate.country --rotate-owner
+# Run it between deploys. Open sessions keep working; new ones need the new password.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,10 +35,12 @@ confirm_rate="${CONFIRM_RATE_LIMIT_MAX:-10}"
 ttl="${CHALLENGE_TTL_SECONDS:-600}"
 expose="${EXPOSE_CONTRACT_AMOUNTS:-false}"
 backup_bucket="${CONFIRM_BACKUP_BUCKET:-}"
+rotate_owner=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --local|--vm) mode="${1#--}"; shift ;;
+    --rotate-owner) rotate_owner=1; shift ;;
     --db-name) db_name="$2"; shift 2 ;;
     --domain) domain="$2"; shift 2 ;;
     --api-env) api_env="$2"; shift 2 ;;
@@ -117,6 +125,13 @@ if ! role_exists claimapi; then
     echo "role claimapi is missing; bootstrap the database before setup-roles" >&2
     exit 1
   fi
+fi
+
+if [ -z "$backup_bucket" ]; then
+  backup_bucket="$(env_value "$migrate_env" CONFIRM_BACKUP_BUCKET)"
+  case "$backup_bucket" in
+    *[!A-Za-z0-9._-]*) echo "invalid CONFIRM_BACKUP_BUCKET in $migrate_env" >&2; exit 1 ;;
+  esac
 fi
 
 owner_url="$(env_value "$migrate_env" DATABASE_URL)"
@@ -204,11 +219,19 @@ fi
 # Rotate only after grants succeed and the pre-split copy exists, and write the
 # new password down as the next step. A failure before this leaves the old
 # password working; a failure after it leaves the new one in the migrate env.
+splitting=0
 if [ "$mode" = "vm" ] && [ -f "$api_env" ] && grep -q '^DATABASE_URL=' "$api_env"; then
+  splitting=1
+fi
+if [ "$mode" = "vm" ] && { [ "$splitting" -eq 1 ] || [ "$rotate_owner" -eq 1 ]; }; then
   owner_password="$(openssl rand -hex 24)"
   set_password claimapi "$owner_password"
   owner_url="postgres://claimapi:${owner_password}@127.0.0.1:5432/${db_name}"
-  echo "rotated the owner database password for the role split"
+  if [ "$splitting" -eq 1 ]; then
+    echo "rotated the owner database password for the role split"
+  else
+    echo "rotated the owner database password (--rotate-owner)"
+  fi
 fi
 
 owner_body="DATABASE_URL=${owner_url}"
