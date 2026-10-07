@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Format the confirmed-wallets report from CSV extracts.
 
-Run through db/ops/confirmed-wallets.sh, which pulls the four extracts from the
+Run through db/ops/confirmed-wallets.sh, which pulls the five extracts from the
 database. This file has no database code so it can be tested with fixtures.
 
 Amounts are atto-ONE integers. Conversion to ONE mirrors shared/src/amount.ts:
 exact decimal strings, truncated (never rounded) for display.
+
+Review state (approval decision, wallet part sent, vault shares sent per
+validator) is read from every row of confirm.reviews as review_tracks.py
+describes.
 """
 
 from __future__ import annotations
@@ -18,7 +22,10 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Set
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import review_tracks as rt  # noqa: E402
 
 ATTO_PER_ONE = 10**18
 
@@ -77,14 +84,27 @@ CSV_COLUMNS = [
     "total_claim_one",
     "last_activity_utc",
     "last_activity_type",
-    "review_status",
-    "review_batch_id",
-    "reviewed_at_utc",
+    "decision",
+    "decision_label",
+    "decision_at_utc",
+    "decision_note",
+    "wallet_status",
+    "wallet_sent_run",
+    "wallet_sent_at_utc",
+    "vault_status",
+    "vault_positions_sent",
+    "vault_positions_pending",
+    "vault_pending_atto",
+    "vault_pending_one",
+    "vault_sent_runs",
     "signature",
     "signature_scheme",
     "message",
 ]
 
+# vault-batch reads this file by column name (address, validator_address,
+# expected_shares_atto); new columns must not reuse its candidate names such as
+# amount_atto, delegator_address or destination_status.
 VAULT_CSV_COLUMNS = [
     "address",
     "validator_address",
@@ -99,7 +119,14 @@ VAULT_CSV_COLUMNS = [
     "is_self_delegation",
     "priority",
     "governor_status",
+    "sent_status",
+    "sent_run",
+    "sent_at_utc",
 ]
+
+DECISIONS = ("none", "approved", "rejected")
+WALLET_FILTERS = ("pending", "sent")
+VAULT_FILTERS = ("pending", "partial", "sent")
 
 
 # ---------------------------------------------------------------- amounts
@@ -219,6 +246,9 @@ class VaultPosition:
         self.governor_status = (row.get("governor_status") or "").strip()
         self.adjustments = adjustments
         self.expected_shares = adjustments.net(self.staked)
+        # "none" (nothing to send), "pending" or "sent"; set by apply_reviews.
+        self.status = "none" if self.expected_shares <= 0 else "pending"
+        self.sent: Optional[rt.Review] = None
 
     def csv_row(self) -> Dict[str, str]:
         return {
@@ -235,6 +265,9 @@ class VaultPosition:
             "is_self_delegation": yes_no(self.is_self),
             "priority": yes_no(self.priority),
             "governor_status": self.governor_status,
+            "sent_status": self.status,
+            "sent_run": self.sent.run if self.sent else "",
+            "sent_at_utc": self.sent.reviewed_at if self.sent else "",
         }
 
 
@@ -265,9 +298,6 @@ class Confirmation:
         self.issuance_treatment = (row.get("issuance_treatment") or "").strip()
         self.last_activity = (row.get("last_activity_utc") or "").strip()
         self.last_activity_type = (row.get("last_activity_type") or "").strip()
-        self.review_status = (row.get("review_status") or "").strip()
-        self.review_batch_id = (row.get("review_batch_id") or "").strip()
-        self.reviewed_at = (row.get("reviewed_at_utc") or "").strip()
         self.vaults = vaults
         self.wallet_adjustments = wallet_adjustments
 
@@ -285,9 +315,73 @@ class Confirmation:
         self.qualification_total = amt("qualification_total_atto")
         self.total_claim = amt("total_claim_atto")
 
+        # Set by apply_reviews; without reviews every confirmation is undecided.
+        self.decision = "none"
+        self.decision_review: Optional[rt.Review] = None
+        self.wallet_review: Optional[rt.Review] = None
+        if not self.in_ledger:
+            self.wallet_status = "unknown"
+        elif self.wallet_allocation <= 0:
+            self.wallet_status = "none"
+        else:
+            self.wallet_status = "pending"
+
     @property
     def signer_matches(self) -> bool:
         return self.signer == self.address
+
+    def live_vaults(self) -> List[VaultPosition]:
+        """Positions with shares to send."""
+        return [v for v in self.vaults if v.status != "none"]
+
+    @property
+    def vault_status(self) -> str:
+        """unknown, none (nothing to send), pending (none sent), partial, or sent."""
+        if not self.in_ledger:
+            return "unknown"
+        live = self.live_vaults()
+        if not live:
+            return "none"
+        sent = sum(1 for v in live if v.status == "sent")
+        if sent == 0:
+            return "pending"
+        return "sent" if sent == len(live) else "partial"
+
+    def sent_runs(self) -> Set[str]:
+        runs = {v.sent.run for v in self.vaults if v.sent}
+        if self.wallet_review:
+            runs.add(self.wallet_review.run)
+        return runs
+
+    def vault_pending_amount(self) -> int:
+        return sum(v.expected_shares for v in self.live_vaults() if v.status == "pending")
+
+    def review_text(self) -> str:
+        r = self.decision_review
+        if self.decision == "none":
+            decision = "not reviewed"
+        else:
+            bits = [b for b in (r.label if r else "", display_time(r.reviewed_at) if r else "") if b]
+            decision = self.decision + (f" ({', '.join(bits)})" if bits else "")
+            if self.decision == "rejected" and r and r.note:
+                decision += f": {r.note}"
+        wallet = {
+            "unknown": "wallet unknown",
+            "none": "wallet nothing to send",
+            "pending": "wallet pending",
+        }.get(self.wallet_status, "")
+        if self.wallet_status == "sent" and self.wallet_review:
+            wallet = f"wallet sent by {self.wallet_review.run}"
+        live = self.live_vaults()
+        status = self.vault_status
+        if status == "unknown":
+            vault = "vault unknown"
+        elif status == "none":
+            vault = "vault nothing to send"
+        else:
+            sent = sum(1 for v in live if v.status == "sent")
+            vault = f"vault {sent} of {len(live)} sent"
+        return " | ".join((decision, wallet, vault))
 
     def vault_breakdown_text(self) -> str:
         return ";".join(
@@ -337,9 +431,19 @@ class Confirmation:
             "total_claim_one": one(self.total_claim),
             "last_activity_utc": self.last_activity,
             "last_activity_type": self.last_activity_type,
-            "review_status": self.review_status,
-            "review_batch_id": self.review_batch_id,
-            "reviewed_at_utc": self.reviewed_at,
+            "decision": self.decision,
+            "decision_label": self.decision_review.label if self.decision_review else "",
+            "decision_at_utc": self.decision_review.reviewed_at if self.decision_review else "",
+            "decision_note": self.decision_review.note if self.decision_review else "",
+            "wallet_status": self.wallet_status,
+            "wallet_sent_run": self.wallet_review.run if self.wallet_review else "",
+            "wallet_sent_at_utc": self.wallet_review.reviewed_at if self.wallet_review else "",
+            "vault_status": self.vault_status,
+            "vault_positions_sent": str(sum(1 for v in self.vaults if v.status == "sent")),
+            "vault_positions_pending": str(sum(1 for v in self.vaults if v.status == "pending")),
+            "vault_pending_atto": str(self.vault_pending_amount()),
+            "vault_pending_one": one(self.vault_pending_amount()),
+            "vault_sent_runs": ";".join(sorted({v.sent.run for v in self.vaults if v.sent})),
             "signature": self.signature,
             "signature_scheme": self.signature_scheme,
             "message": self.message,
@@ -364,11 +468,72 @@ def build(
     return out
 
 
+def apply_reviews(items: List[Confirmation], state: rt.ReviewState) -> None:
+    for c in items:
+        c.decision, c.decision_review = state.decision_of(c.id)
+        if c.wallet_status in ("pending", "sent"):
+            c.wallet_review = state.wallet_sent(c.address)
+            c.wallet_status = "sent" if c.wallet_review else "pending"
+        for v in c.vaults:
+            if v.status == "none":
+                continue
+            v.sent = state.vault_sent(c.address, v.validator_address)
+            v.status = "sent" if v.sent else "pending"
+
+
+def select(
+    items: List[Confirmation],
+    decision: Optional[str] = None,
+    wallet: Optional[str] = None,
+    vault: Optional[str] = None,
+    runs: Iterable[str] = (),
+) -> List[Confirmation]:
+    wanted_runs = set(runs)
+    out = []
+    for c in items:
+        if decision and c.decision != decision:
+            continue
+        if wallet and c.wallet_status != wallet:
+            continue
+        if vault == "pending" and c.vault_status not in ("pending", "partial"):
+            continue
+        if vault in ("partial", "sent") and c.vault_status != vault:
+            continue
+        if wanted_runs and not (wanted_runs & c.sent_runs()):
+            continue
+        out.append(c)
+    return out
+
+
+def vault_rows(items: List[Confirmation], vault: Optional[str]) -> List[VaultPosition]:
+    """Positions for the vault-shares CSV, once per wallet and validator even when a
+    wallet signed under two data versions; only those still to send under
+    --vault pending|partial."""
+    seen, out = set(), []
+    for c in items:
+        for v in c.vaults:
+            key = (v.address, v.validator_address)
+            if key in seen or (vault in ("pending", "partial") and v.status != "pending"):
+                continue
+            seen.add(key)
+            out.append(v)
+    return out
+
+
 # ---------------------------------------------------------------- stats
 
 
+STATUS_ORDER = ("pending", "partial", "sent", "none", "unknown")
+STATUS_WORDS = {"none": "nothing to send"}
+
+
 class Stats:
-    def __init__(self, items: List[Confirmation], candidate_rows: List[Dict[str, str]]) -> None:
+    def __init__(
+        self,
+        items: List[Confirmation],
+        candidate_rows: List[Dict[str, str]],
+        state: Optional[rt.ReviewState] = None,
+    ) -> None:
         self.rows = len(items)
         self.addresses = {c.address for c in items}
         self.wallets = len(self.addresses)
@@ -379,7 +544,7 @@ class Stats:
         self.in_ledger = sum(1 for c in items if c.in_ledger)
         self.signer_mismatch = sum(1 for c in items if not c.signer_matches)
         self.not_deferred = sum(1 for c in items if c.in_ledger and c.ledger_stage != "deferred")
-        self.review = Counter((c.review_status or "none") for c in items)
+        self.decisions = Counter(c.decision for c in items)
         times = sorted(c.confirmed_at for c in items if c.confirmed_at)
         self.first = times[0] if times else ""
         self.last = times[-1] if times else ""
@@ -394,6 +559,20 @@ class Stats:
         self.vault_allocation = sum(c.vault_allocation for c in latest.values())
         self.wallets_with_vaults = sum(1 for c in latest.values() if c.vaults)
         self.vault_positions = sum(len(c.vaults) for c in latest.values())
+        # Sent state belongs to the address, so these count each wallet once too.
+        self.wallet_count: Counter = Counter()
+        self.wallet_amount: Counter = Counter()
+        self.position_count: Counter = Counter()
+        self.position_amount: Counter = Counter()
+        for c in latest.values():
+            self.wallet_count[c.wallet_status] += 1
+            self.wallet_amount[c.wallet_status] += c.wallet_allocation
+            for v in c.vaults:
+                self.position_count[v.status] += 1
+                self.position_amount[v.status] += v.expected_shares
+
+        self.unrecognised_reviews = len(state.unrecognised) if state else 0
+        self.approvals_as_included = state.approvals_stored_as_included() if state else 0
 
         self.candidate_sets = []
         for row in candidate_rows:
@@ -417,7 +596,14 @@ class Stats:
 # ---------------------------------------------------------------- rendering
 
 
-def render_header(generated: datetime, source: str, ledger_version: str, stats: Stats) -> List[str]:
+def render_header(
+    generated: datetime,
+    source: str,
+    ledger_version: str,
+    stats: Stats,
+    filters: str = "",
+    total_rows: Optional[int] = None,
+) -> List[str]:
     local = generated.astimezone()
     lines = [
         "Confirmed wallets",
@@ -437,6 +623,9 @@ def render_header(generated: datetime, source: str, ledger_version: str, stats: 
             )
     else:
         lines.append("  candidates   none loaded")
+    if filters:
+        shown = f" (showing {stats.rows:,} of {total_rows:,} confirmations)" if total_rows is not None else ""
+        lines.append(f"  filters      {filters}{shown}")
     return lines
 
 
@@ -447,11 +636,9 @@ def render_record(index: int, c: Confirmation) -> List[str]:
     if c.account_category:
         reason_bits.append(c.account_category)
     reason_bits.append(f"candidate: {yes_no(c.still_candidate, 'unknown')}")
-    review = c.review_status or "none"
-    if c.review_batch_id:
-        review += f" ({c.review_batch_id})"
-    reason_bits.append(f"review: {review}")
     lines.append(f"{pad}reason        {' | '.join(reason_bits)}")
+    lines.append(f"{pad}id            {c.id}")
+    lines.append(f"{pad}review        {c.review_text()}")
     lines.append(f"{pad}versions      data {c.data_version} | policy {c.policy_version}")
 
     if not c.in_ledger:
@@ -492,6 +679,8 @@ def render_record(index: int, c: Confirmation) -> List[str]:
                     extra.append("priority")
                 if v.adjustments.any():
                     extra.append(f"shares {format_one(v.expected_shares)}")
+                if v.sent:
+                    extra.append(f"sent by {v.sent.run}")
                 name = f"  {v.validator_name}" if v.validator_name else ""
                 tail = f"  ({', '.join(extra)})" if extra else ""
                 lines.append(f"{pad}              {format_one(v.staked):>14} ONE  {v.validator_address}{name}{tail}")
@@ -512,9 +701,11 @@ def render_record(index: int, c: Confirmation) -> List[str]:
 def render_compact(items: List[Confirmation]) -> List[str]:
     header = (
         f"{'id':>6}  {'confirmed (UTC)':<19}  {'address':<42}  {'reason':<19}  "
-        f"{'total ONE':>18}  {'wallet ONE':>18}  {'vault ONE':>14}  {'cand':<4}  {'review':<8}  signature"
+        f"{'total ONE':>18}  {'wallet ONE':>18}  {'vault ONE':>14}  {'cand':<4}  "
+        f"{'decision':<8}  {'wallet':<7}  {'vault':<7}  signature"
     )
     lines = [header, "-" * len(header)]
+    short = {"none": "-", "unknown": "?"}
     for c in items:
         sig = f"{c.signature[:10]}…{c.signature[-8:]}" if len(c.signature) > 20 else c.signature
         confirmed = c.confirmed_at.replace("T", " ").replace("Z", "")
@@ -523,9 +714,24 @@ def render_compact(items: List[Confirmation]) -> List[str]:
             f"{format_one(c.total_allocation) if c.in_ledger else '-':>18}  "
             f"{format_one(c.wallet_allocation) if c.in_ledger else '-':>18}  "
             f"{format_one(c.vault_allocation) if c.in_ledger else '-':>14}  "
-            f"{yes_no(c.still_candidate, '?'):<4}  {(c.review_status or 'none'):<8}  {sig}"
+            f"{yes_no(c.still_candidate, '?'):<4}  {c.decision:<8}  "
+            f"{short.get(c.wallet_status, c.wallet_status):<7}  {short.get(c.vault_status, c.vault_status):<7}  {sig}"
         )
     return lines
+
+
+def status_counts(counts: Counter, amounts: Counter, unit: str) -> str:
+    parts = []
+    for status in STATUS_ORDER:
+        if not counts[status]:
+            continue
+        word = STATUS_WORDS.get(status, status)
+        n = counts[status]
+        if status in ("none", "unknown"):
+            parts.append(f"{word} {n:,}")
+        else:
+            parts.append(f"{word} {n:,} {unit}{'s' if n != 1 else ''} ({format_one(amounts[status])} ONE)")
+    return " | ".join(parts) or "none"
 
 
 def render_stats(stats: Stats) -> List[str]:
@@ -548,7 +754,23 @@ def render_stats(stats: Stats) -> List[str]:
     lines.append(f"  in ledger               {stats.in_ledger:,} / {stats.rows:,}{ledger_note}")
     if stats.not_deferred:
         lines.append(f"  ledger stage changed    {stats.not_deferred:,} wallet(s) no longer 'deferred' in the loaded ledger")
-    lines.append("  review status           " + " | ".join(f"{k} {v:,}" for k, v in stats.review.most_common()))
+    lines.append(
+        "  decisions               "
+        + " | ".join(f"{k} {stats.decisions[k]:,}" for k in DECISIONS if stats.decisions[k])
+    )
+    lines.append("  wallet part             " + status_counts(stats.wallet_count, stats.wallet_amount, "wallet"))
+    if stats.vault_positions:
+        lines.append("  vault shares            " + status_counts(stats.position_count, stats.position_amount, "position"))
+    if stats.approvals_as_included:
+        lines.append(
+            f"  note                    {stats.approvals_as_included:,} approval(s) are stored as 'included' without "
+            "wallet:/vault:; they are not counted as sent"
+        )
+    if stats.unrecognised_reviews:
+        lines.append(
+            f"  ignored review rows     {stats.unrecognised_reviews:,} row(s) with a wallet:/vault: batch id or status "
+            "that does not parse (see db/ops/review_tracks.py)"
+        )
     lines.append(f"  signer mismatch         {stats.signer_mismatch:,}")
     lines.append(f"  first / last            {display_time(stats.first)}  /  {display_time(stats.last)}")
     lines.append(
@@ -587,19 +809,35 @@ def sha256_of(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def export_csv(items: List[Confirmation], out_dir: Path, generated: datetime) -> List[str]:
+def filter_pairs(args: argparse.Namespace) -> List[tuple]:
+    pairs = [(name, getattr(args, name)) for name in ("decision", "wallet", "vault") if getattr(args, name)]
+    pairs += [("run", run) for run in args.run]
+    return pairs
+
+
+def export_csv(
+    items: List[Confirmation],
+    out_dir: Path,
+    generated: datetime,
+    filters: Iterable[tuple] = (),
+    vault: Optional[str] = None,
+) -> List[str]:
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = generated.strftime("%Y%m%dT%H%M%SZ")
-    main = out_dir / f"confirmed-wallets-{stamp}.csv"
-    vaults = out_dir / f"confirmed-wallets-{stamp}-vault-shares.csv"
+    # A filtered export says so in its name, so it is not mistaken for the full list.
+    suffix = "".join(f"-{name}-{value}" for name, value in filters)
+    main = out_dir / f"confirmed-wallets-{stamp}{suffix}.csv"
+    vaults = out_dir / f"confirmed-wallets-{stamp}{suffix}-vault-shares.csv"
     main_rows = write_csv(main, CSV_COLUMNS, (c.csv_row() for c in items))
-    vault_rows = write_csv(vaults, VAULT_CSV_COLUMNS, (v.csv_row() for c in items for v in c.vaults))
+    position_rows = write_csv(vaults, VAULT_CSV_COLUMNS, (v.csv_row() for v in vault_rows(items, vault)))
+    which = "still to send, " if vault in ("pending", "partial") else ""
     return [
         "CSV",
         f"  {main}",
         f"      {main_rows:,} row{'s' if main_rows != 1 else ''}, sha256 {sha256_of(main)}",
         f"  {vaults}",
-        f"      {vault_rows:,} row{'s' if vault_rows != 1 else ''} (one per wallet and validator)",
+        f"      {position_rows:,} row{'s' if position_rows != 1 else ''} ({which}one per wallet and validator), "
+        f"sha256 {sha256_of(vaults)}",
     ]
 
 
@@ -612,13 +850,26 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--vault-shares", help="CSV extract of delegations for confirmed addresses")
     parser.add_argument("--exceptions", help="CSV extract of routing_exceptions for confirmed addresses")
     parser.add_argument("--candidates", help="CSV extract of confirm.candidates totals per version")
+    parser.add_argument("--reviews", help="CSV extract of every confirm.reviews row, in (reviewed_at, id) order")
+    parser.add_argument("--decision", choices=DECISIONS, help="only confirmations with this approval decision")
+    parser.add_argument("--wallet", choices=WALLET_FILTERS, help="only wallets whose wallet part is pending or sent")
+    parser.add_argument("--vault", choices=VAULT_FILTERS,
+                        help="pending: some vault shares still to send (includes partial); partial; sent: all sent")
+    parser.add_argument("--run", action="append", default=[],
+                        help="only wallets with a wallet part or vault shares marked sent by this run (repeatable)")
     parser.add_argument("--ledger-data-version", default="", help="snapshot_meta.data_version of the loaded ledger")
     parser.add_argument("--source", default="", help="database label for the header (no credentials)")
     parser.add_argument("--csv", action="store_true", help="also write CSV files under --out-dir")
     parser.add_argument("--out-dir", default="data/confirmed-wallets", help="directory for --csv output")
     parser.add_argument("--compact", action="store_true", help="one line per confirmation instead of full records")
     parser.add_argument("--generated-at", help="override the report timestamp (ISO 8601 UTC), for tests")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    for run in args.run:
+        try:
+            rt.check_name(run, "--run")
+        except rt.ReviewError as exc:
+            parser.error(str(exc))
+    return args
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -628,14 +879,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         generated = datetime.now(timezone.utc)
 
-    items = build(read_rows(args.confirmations), read_rows(args.vault_shares), read_rows(args.exceptions))
-    stats = Stats(items, read_rows(args.candidates))
+    everything = build(read_rows(args.confirmations), read_rows(args.vault_shares), read_rows(args.exceptions))
+    state = rt.ReviewState(read_rows(args.reviews))
+    apply_reviews(everything, state)
+    filters = filter_pairs(args)
+    items = select(everything, args.decision, args.wallet, args.vault, args.run)
+    stats = Stats(items, read_rows(args.candidates), state)
 
     out: List[str] = []
-    out.extend(render_header(generated, args.source, args.ledger_data_version, stats))
+    filter_text = ", ".join(f"{name} {value}" for name, value in filters)
+    out.extend(render_header(generated, args.source, args.ledger_data_version, stats, filter_text, len(everything)))
     out.append("")
     if not items:
-        out.append("No confirmations recorded.")
+        out.append("No confirmations match these filters." if filters and everything else "No confirmations recorded.")
     elif args.compact:
         out.extend(render_compact(items))
     else:
@@ -646,7 +902,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     out.extend(render_stats(stats))
     if args.csv:
         out.append("")
-        out.extend(export_csv(items, Path(args.out_dir), generated))
+        out.extend(export_csv(items, Path(args.out_dir), generated, filters, args.vault))
     sys.stdout.write("\n".join(out) + "\n")
     return 0
 
