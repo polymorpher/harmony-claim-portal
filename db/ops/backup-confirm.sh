@@ -55,6 +55,16 @@ else
   mkdir -p "$base"
 fi
 
+# Deploy installs pgpass.sh next to this script; without it the URL is passed as before.
+if [ -f "$here/pgpass.sh" ]; then
+  # shellcheck source=pgpass.sh
+  source "$here/pgpass.sh"
+  secrets="$(mktemp -d)"
+  trap 'rm -rf "$secrets"' EXIT
+  dsn="$(pg_hide_password "$dsn" "$secrets/pgpass")"
+  if [ -f "$secrets/pgpass" ]; then export PGPASSFILE="$secrets/pgpass"; fi
+fi
+
 log "dumping schema confirm"
 pg_dump "$dsn" --schema=confirm --format=custom --no-owner --file="$out"
 chmod 600 "$out"

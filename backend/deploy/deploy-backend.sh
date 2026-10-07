@@ -140,6 +140,7 @@ done
 
 sudo mkdir -p /usr/local/lib/harmony-claim-portal /var/lib/harmony-claim-api/backups
 sudo install -m 0755 db/ops/backup-confirm.sh /usr/local/lib/harmony-claim-portal/backup-confirm.sh
+sudo install -m 0644 db/ops/pgpass.sh /usr/local/lib/harmony-claim-portal/pgpass.sh
 sudo install -m 0644 harmony-claim-backup.service harmony-claim-backup.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now harmony-claim-backup.timer >/dev/null

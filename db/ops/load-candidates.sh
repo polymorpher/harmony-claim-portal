@@ -15,6 +15,8 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 # shellcheck source=../../infra/lib.sh
 source "$root/infra/lib.sh"
+# shellcheck source=pgpass.sh
+source "$here/pgpass.sh"
 
 if [ -f "${HCP_ENV_FILE:-$root/.env}" ]; then
   load_env
@@ -52,6 +54,8 @@ esac
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 csv="$work/candidates.csv"
+dsn="$(pg_hide_password "$dsn" "$work/pgpass")"
+if [ -f "$work/pgpass" ]; then export PGPASSFILE="$work/pgpass"; fi
 
 log "selecting candidates"
 python3 "$here/load-candidates.py" \

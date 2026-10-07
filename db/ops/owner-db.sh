@@ -5,7 +5,8 @@
 #
 #   OWNER_DB_TUNNEL=1                # default: IAP tunnel to the VM
 #   OWNER_DB_TUNNEL=0 OWNER_DB_URL=… # a URL you already have (or CONFIRM_OWNER_URL / DATABASE_URL)
-#   owner_db_open "$work"            # sets OWNER_DB_URL and OWNER_DB_SOURCE (no password)
+#   owner_db_open "$work"            # sets OWNER_DB_URL (without its password) and OWNER_DB_SOURCE;
+#                                    # the password goes to $work/pgpass, exported as PGPASSFILE
 #   owner_db_extract "$work"         # writes the CSV extracts, sets OWNER_DB_LEDGER_VERSION
 #   owner_db_close                   # ends a tunnel this process opened; safe to call twice
 #
@@ -14,6 +15,9 @@
 # localhost and reads the owner database URL from the VM (a root-only file
 # there). If something already listens on DB_TUNNEL_PORT, for example
 # backend/deploy/tunnel-db.sh, that tunnel is used and left open.
+
+# shellcheck source=pgpass.sh
+source "$(dirname "${BASH_SOURCE[0]}")/pgpass.sh"
 
 OWNER_DB_URL="${OWNER_DB_URL:-}"
 OWNER_DB_SOURCE=""
@@ -83,8 +87,9 @@ owner_db_open() {
   if [ "${OWNER_DB_TUNNEL:-1}" -ne 1 ]; then
     OWNER_DB_URL="${OWNER_DB_URL:-${CONFIRM_OWNER_URL:-${DATABASE_URL:-}}}"
     [ -n "$OWNER_DB_URL" ] || die "--no-tunnel needs --db-url URL, or CONFIRM_OWNER_URL / DATABASE_URL in .env"
+    _owner_db_hide_password "$work"
     # Header label: scheme, user, host, port and database; never the password.
-    OWNER_DB_SOURCE="$(printf '%s' "$OWNER_DB_URL" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://[^:/@]+):[^@]*@#\1@#')"
+    OWNER_DB_SOURCE="$OWNER_DB_URL"
     return 0
   fi
 
@@ -148,7 +153,16 @@ owner_db_open() {
   # Point the URL at the local end of the tunnel.
   OWNER_DB_URL="$(printf '%s' "$raw_url" | sed -E "s#@[^/]+/#@localhost:${DB_TUNNEL_PORT}/#")"
   _owner_db_port_open "$DB_TUNNEL_PORT" || die "nothing is listening on localhost:$DB_TUNNEL_PORT: $(_owner_db_log_tail "$work/tunnel.log")"
+  _owner_db_hide_password "$work"
   OWNER_DB_SOURCE="$VM_NAME PostgreSQL via IAP tunnel (localhost:$DB_TUNNEL_PORT)"
+}
+
+# psql must never get the password as an argument, where `ps` shows it.
+_owner_db_hide_password() {
+  OWNER_DB_URL="$(pg_hide_password "$OWNER_DB_URL" "$1/pgpass")"
+  if [ -f "$1/pgpass" ]; then
+    export PGPASSFILE="$1/pgpass"
+  fi
 }
 
 # COPY ... TO STDOUT needs no server-side file privilege. Timestamps are
@@ -234,6 +248,7 @@ COPY (
     e.component,
     lower(e.validator_address) AS validator_address,
     e.destination_status,
+    lower(e.destination_address) AS destination_address,
     e.amount_atto::text
   FROM public.routing_exceptions e
   WHERE lower(e.source_address) IN (SELECT DISTINCT lower(address) FROM confirm.confirmations)

@@ -13,6 +13,8 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 # shellcheck source=../../infra/lib.sh
 source "$root/infra/lib.sh"
+# shellcheck source=pgpass.sh
+source "$here/pgpass.sh"
 
 if [ -f "${HCP_ENV_FILE:-$root/.env}" ]; then
   load_env
@@ -32,6 +34,10 @@ done
 [ -n "$dsn" ] || die "pass --dsn or set CONFIRM_OWNER_URL"
 require_tools psql python3
 mkdir -p "$out"
+secrets="$(mktemp -d)"
+trap 'rm -rf "$secrets"' EXIT
+dsn="$(pg_hide_password "$dsn" "$secrets/pgpass")"
+if [ -f "$secrets/pgpass" ]; then export PGPASSFILE="$secrets/pgpass"; fi
 
 log "exporting confirmations"
 psql "$dsn" -v ON_ERROR_STOP=1 <<EOF
