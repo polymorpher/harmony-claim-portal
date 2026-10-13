@@ -34,3 +34,5 @@ pgdata/
 *.dump
 *.sql.gz
 injector/out/
+# Per-vault cutoff totals are embargoed numbers (injector/build_vault_catalog.py)
+frontend/public/vault-catalog*.json
