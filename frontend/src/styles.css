@@ -120,8 +120,76 @@ tr.hold td { color: #e8c777; }
 
 .footer { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 0.85rem; margin-top: 12px; }
 
+/* Governor Vaults */
+input.search { width: 100%; font-family: inherit; }
+.filters { display: flex; flex-wrap: wrap; gap: 6px 20px; margin: 10px 0 14px; color: var(--muted); font-size: 0.9rem; }
+.filters input, label.check input { flex: none; width: auto; margin: 0 6px 0 0; vertical-align: middle; }
+label.check { display: block; margin: 10px 0; color: var(--muted); font-size: 0.9rem; }
+table.vaults a { font-weight: 600; text-decoration: none; }
+table.vaults a:hover { text-decoration: underline; }
+tr.planned td { color: var(--muted); }
+.vault-name { font-size: 1.35rem !important; word-break: break-word; }
+.tag {
+  display: inline-block; margin-left: 6px; padding: 0 7px; border-radius: 999px; font-size: 0.75rem;
+  border: 1px solid var(--border); color: var(--muted); vertical-align: middle;
+}
+.actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 18px; }
+.action { background: #0c1117; border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+.action h3 { margin: 0 0 6px; font-size: 1rem; }
+.action > label { display: block; color: var(--muted); font-size: 0.9rem; margin: 10px 0 6px; }
+.action > input { width: 100%; }
+.governor { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.ok-text { color: #5fd39c; }
+table.activity td:first-child { white-space: nowrap; font-size: 0.85rem; }
+.dialog {
+  max-width: 560px; width: calc(100% - 32px); padding: 22px 24px; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--card); color: var(--text);
+}
+.dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+.dialog h2 { margin: 0 0 14px; font-size: 1.15rem; }
+.dialog-buttons { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+/* Delegator breakdown: one colour per category, shared by the bar and the table swatches */
+.cat-airdrop { background: #2fb37a; }
+.cat-confirmed { background: #8fe0b8; }
+.badge {
+  display: inline-block; margin-top: 4px; padding: 1px 9px; border-radius: 999px; font-size: 0.75rem; font-weight: 600;
+  text-decoration: none; vertical-align: middle; border: 1px solid var(--border); color: var(--muted);
+}
+a.badge:hover { text-decoration: underline; }
+.badge.signed, .badge.signed:visited { color: #5fd39c; border-color: #2fb37a; background: rgba(47, 179, 122, 0.12); }
+.badge.unsigned, .badge.unsigned:visited { color: #e8c777; border-color: var(--warn); background: rgba(184, 134, 43, 0.14); }
+.vault-name .badge { margin: 0 0 0 8px; font-size: 0.8rem; }
+.cat-pending { background: repeating-linear-gradient(45deg, #2fb37a 0 3px, transparent 3px 6px); box-shadow: inset 0 0 0 1px #2fb37a; }
+.cat-pending-confirmed { background: repeating-linear-gradient(45deg, #8fe0b8 0 3px, transparent 3px 6px); box-shadow: inset 0 0 0 1px #8fe0b8; }
+.summary > div.wide { grid-column: span 2; }
+.summary .hint { margin-top: 4px; color: var(--muted); font-size: 0.82rem; }
+.cat-waiting { background: #e0a93b; }
+.cat-later { background: #4a90d9; }
+.cat-review { background: #e07b39; }
+.cat-below { background: #6b7785; }
+.cat-exchange { background: #9b7be0; }
+.cat-not-issued { background: #c2453f; }
+.cat-deposit { background: #3fb6c9; }
+.cat-withdraw { background: #d97a6c; }
+.stake-bar { display: flex; gap: 2px; height: 16px; margin: 4px 0 12px; border-radius: 8px; overflow: hidden; }
+.stake-bar span { flex-basis: 0; min-width: 4px; }
+.swatch { display: inline-block; width: 12px; height: 12px; margin-right: 8px; border-radius: 3px; vertical-align: -1px; }
+table.breakdown td.op { width: 1.4em; padding-right: 0; color: var(--muted); font-weight: 700; text-align: center; }
+table.breakdown tr.group td { font-weight: 600; padding-top: 12px; border-bottom: 0; }
+table.breakdown tr.member td { padding-top: 4px; padding-bottom: 6px; border-bottom: 0; color: var(--muted); }
+table.breakdown tr.member td:nth-child(2) { padding-left: 22px; color: var(--text); }
+table.breakdown tbody.group { border-bottom: 1px solid var(--border); }
+table.breakdown tr.total td { border-top: 2px solid var(--muted); border-bottom: 0; font-weight: 600; }
+table.breakdown td .small { margin-left: 20px; }
+blockquote.release {
+  margin: 0 0 14px; padding: 12px 14px; border-left: 3px solid var(--accent);
+  background: #0c1117; border-radius: 0 8px 8px 0;
+}
+
 @media (max-width: 600px) {
   .row { flex-direction: column; }
   .addr { grid-template-columns: 1fr; }
-  th:nth-child(3), td:nth-child(3), th:nth-child(4), td:nth-child(4) { display: none; }
+  .summary > div.wide { grid-column: auto; }
+  table:not(.breakdown) th:nth-child(3), table:not(.breakdown) td:nth-child(3),
+  table:not(.breakdown) th:nth-child(4), table:not(.breakdown) td:nth-child(4) { display: none; }
 }

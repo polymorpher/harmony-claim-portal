@@ -19,6 +19,14 @@ export function walletErrorText(err: unknown): string | null {
   return null;
 }
 
+/** Text for a transaction that could not be sent or failed. */
+export function transactionErrorText(err: unknown): string {
+  if (rejectedByUser(err)) return "The transaction was rejected in the wallet.";
+  if (err instanceof BaseError) return err.shortMessage;
+  if (err instanceof Error && err.message) return err.message;
+  return "The transaction could not be sent.";
+}
+
 /** Whether `connector` is the one a pending useConnect() call is connecting. */
 export function isConnecting(pending: boolean, variables: { connector?: unknown } | undefined, connector: Connector): boolean {
   const target = variables?.connector as { uid?: string } | undefined;
