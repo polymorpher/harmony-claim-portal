@@ -240,16 +240,17 @@ function Vaults({ positions }: { positions: VaultPosition[] }) {
   const released = positions.some((p) => p.manual_delivery_atto !== "0");
   return (
     <div className="block">
-      <h3>Validator vault shares (ERC-4626)</h3>
+      <h3>Governor vault shares</h3>
       <p className="small">
         {released
-          ? "Staked ONE of exchange wallets is taken out of the validator's vault and sent separately, so no vault shares are created for it."
-          : "Active stake becomes shares in the validator's vault, 1:1 with the net principal at vault seeding."}
+          ? "Staked ONE of exchange wallets is taken out of the governor vault and sent separately, so no vault shares are created for it."
+          : "Active stake is credited to the same address in the governor vault of the validator it was delegated to, 1:1 with the net principal."}{" "}
+        <a href="/vault">See the governor vaults</a>.
       </p>
       <table>
         <thead>
           <tr>
-            <th>Validator</th>
+            <th>Governor vault</th>
             <th className="num">Principal</th>
             <th className="num">Not issued</th>
             <th className="num">On hold</th>
@@ -368,7 +369,7 @@ function Adjustments({ adjustments }: { adjustments: Adjustment[] }) {
             </div>
             <div className="small">
               {a.user_text}
-              {a.component === "vault_shares" && a.validator_address ? ` (vault of ${shortAddress(a.validator_address)})` : ""}
+              {a.component === "vault_shares" && a.validator_address ? ` (governor vault of ${shortAddress(a.validator_address)})` : ""}
               {a.evidence ? ` Evidence: ${a.evidence}` : ""}
             </div>
           </li>

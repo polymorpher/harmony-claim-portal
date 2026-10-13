@@ -5,11 +5,15 @@ import { WagmiProvider } from "wagmi";
 import { wagmiConfig } from "./wagmi";
 import { App } from "./App";
 import { ConfirmPage } from "./ConfirmPage";
+import { usePathname } from "./router";
+import { VaultPage } from "./vault/VaultPage";
 import "./styles.css";
 
 function Root() {
-  const path = typeof window === "undefined" ? "/" : window.location.pathname.replace(/\/+$/, "") || "/";
-  return path === "/confirm" ? <ConfirmPage /> : <App />;
+  const path = usePathname();
+  if (path === "/confirm") return <ConfirmPage />;
+  if (path === "/vault" || path.startsWith("/vault/")) return <VaultPage path={path} />;
+  return <App />;
 }
 
 const queryClient = new QueryClient();
