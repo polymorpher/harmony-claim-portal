@@ -21,7 +21,7 @@ db/migrations/005_confirm_schema.sql   confirmation candidates and append-only s
 db/migrations/006_confirm_signature_scheme.sql   records how each confirmation was signed
 db/ops/                        role split, candidate load, confirmed-wallets report, export, review, backup (see db/ops/README.md)
 db/seed/reason_texts.json      reason_code -> user-facing title/text (+ apply-reason-texts.sh)
-injector/                      Python loader: harmony-migration CSVs -> Postgres (COPY + atomic swap)
+injector/                      Python loader: harmony-migration CSVs -> Postgres (COPY + atomic swap); vault catalog builder
 backend/                       lookup API, confirmation API, and the proxy in front of them
 frontend/                      Vite + React + wagmi/viem UI, deploy script
 shared/                        @hcp/shared: API types, BigInt atto formatting, one1 bech32
@@ -44,7 +44,7 @@ Single-address lookups only; there are no list, search or aggregate endpoints.
   `notes[]`. The migration policy separates the six-month initial stage, later
   stages, exchange manual delivery, and terminal non-issuance from destination
   readiness. Exchange wallets are never airdropped: their whole entitlement,
-  including stake released from the validator vaults, is stage
+  including stake released from the governor vaults, is stage
   `exchange_manual` with treatment `manual_from_reserve`, sent separately from
   the 2050 reserve to the destination(s) the exchange confirmed (consolidation
   address, split wallet/staking addresses, the same address, or Gate's tiers).
@@ -80,6 +80,75 @@ Confirmation routes:
 - `POST /api/v1/confirmations/challenges` - a random nonce and the exact message to sign; nothing is stored
 - `POST /api/v1/confirmations` - the signature, nonce, issued time, and `signature_scheme` (`personal_sign`, the default, or `harmony_ledger_tx`). The server rebuilds the message, checks it is still inside the time window, and verifies the signature under that scheme
 
+## Governor Vaults (`/vault`)
+
+Each Harmony validator's delegated stake at the cutoff is held in a governor
+vault on Ethereum (`GovernorDelegator` in harmony-migration), with the
+validator as its governor. `/vault` lists the deployed governor vaults and
+`/vault/<vault address>` shows one. The page has no backend. It loads one
+static file, `/vault-catalog.json`, and reads everything else on-chain:
+
+- From the catalog: each planned vault's validator, its Harmony name and
+  commission at the cutoff, the initial governor, and per-vault totals of the
+  cutoff delegations by stage (initial, inactive, under 1,000 ONE, exchange,
+  next stage, not issued). It has no delegator list. The page accepts the
+  catalog only if its creation code hashes to the audited build and every
+  vault address is that code's CREATE2 address for its validator and governor.
+- From Ethereum: whether each vault is deployed, its size, governor and
+  `feeBps`, and every `Deposit`, `Withdraw`, `GovernorTransferred` and
+  `FeeUpdated` event since the first vault deployment. Delegators now, what the
+  reserve Safe has credited, the governor and fee history, and recent activity
+  are computed from those events. Inactive delegators still waiting are the
+  inactive total at the cutoff minus the reserve's credits beyond the initial
+  stage.
+- From Base: whether the validator signed its governor agreement on
+  [governors.country](https://governors.country/). The catalog holds each
+  validator's agreement id (from governors.country's `agreements.json`) and a
+  snapshot of its status; the page reads the live signature count from the
+  MetaLeX CyberAgreementRegistry (`0xa9E808B8eCBB60Bb19abF026B5b863215BC4c134`,
+  `agreements(bytes32)`) in one multicall, and shows the snapshot until that
+  answers or if it fails.
+
+A `feeBps` of 0 means the validator's Harmony commission at the cutoff applies;
+the page shows that commission and, once a governor sets a fee, the change.
+
+With a connected wallet the page withdraws (to the connected address by
+default; another address takes a second confirmation), deposits from the
+connected wallet (an exact-amount approval, then `deposit`), and, for the
+governor, sets the fee or transfers the role. Before the first withdrawal from
+an address the signer must agree to the release text in
+`frontend/src/vault/release.ts`; the browser remembers it per address in
+`localStorage`.
+
+Wallets: browser wallets, WalletConnect, and Ledger over USB. The Ledger
+Ethereum app signs EIP-1559 transactions (`44'/60'` paths; contract calls need
+Blind signing on). The two Harmony Ledger apps connect but cannot send: the
+2025 app is Ledger's Ethereum app built for chain 1666600000 and refuses any
+other chain ID, and the older app only signs Harmony transactions. Neither has
+the Ethereum app's paths, so an address on `44'/1023'` cannot sign Ethereum
+transactions from a Ledger; the page shows it view-only.
+
+Build the catalog from a harmony-migration checkout before deploying the
+frontend (it needs the Harmony archive RPC for names and commissions):
+
+```sh
+# the newest approved confirmed-wallets export (db/ops/confirmed-wallets.sh --decision approved --csv)
+E=data/confirmed-wallets/confirmed-wallets-<time>-decision-approved-vault-pending-vault-shares.csv
+python3 injector/build_vault_catalog.py --migration-repo ~/git/harmony-migration --portal-export $E
+# Sepolia rehearsal vaults, for development:
+python3 injector/build_vault_catalog.py --chain-id 11155111 --portal-export $E --out frontend/public/vault-catalog.sepolia.json
+VITE_VAULT_CATALOG_URL=/vault-catalog.sepolia.json pnpm --filter @hcp/frontend dev
+```
+
+`--portal-export` moves delegators approved on the portal out of "inactive":
+before their vault is funded they show as approved and waiting for funding. A
+vault with no reserve deposit yet shows "Waiting for funding" and what its
+funding will credit; once funded it shows its size against the amount funded.
+
+The catalog's per-vault totals are numbers under harmony-migration's numerical
+embargo; the file is git-ignored and is published by deploying it. RPC
+endpoints come from `VITE_ETH_RPC_URLS` (see `.env.example`).
+
 The lookup process uses the `claim_read` role. The confirmation process uses
 `claim_confirm` and cannot write the claim tables. The owner role used by
 migrations and the injector is not in either process. See `db/ops/README.md`.
@@ -114,8 +183,8 @@ psql "$(grep '^DATABASE_URL=' backend/.env.owner | cut -d= -f2-)" -v ON_ERROR_ST
 
 # checks
 pnpm --filter @hcp/backend test                                        # unit + http tests
-pnpm --filter @hcp/frontend test                                       # Ledger framing and signing against emulated apps
-pnpm test:ops                                                          # candidate selection
+pnpm --filter @hcp/frontend test                                       # Ledger framing and signing against emulated apps, vault logic
+pnpm test:ops                                                          # candidate selection, review, vault catalog
 TEST_DATABASE_URL="$(scripts/dev-postgres.sh url claims)" pnpm --filter @hcp/backend test   # + integration
 pnpm build                                                             # shared, backend, frontend
 pnpm shellcheck
@@ -137,7 +206,8 @@ All scripts are idempotent bash over `gcloud`/`curl`; re-running is safe.
    6. `infra/gcp/30-setup-load-balancer.sh` - waits for the certificate to report `ACTIVE` without sending traffic to an unready origin.
 3. Application:
    1. `backend/deploy/deploy-backend.sh` - builds locally, uploads over IAP, applies pending `db/migrations/*.sql`, seeds reason texts, runs `db/ops/setup-roles.sh --vm`, installs the lookup, confirmation, and proxy units, restarts, health-checks.
-   2. `frontend/deploy/deploy-frontend.sh` - builds, `gcloud storage rsync` to the bucket, cache headers, CDN invalidation.
+   2. `python3 injector/build_vault_catalog.py --migration-repo ~/git/harmony-migration --portal-export <approved vault-shares export>` - writes `frontend/public/vault-catalog.json` for `/vault`. It lists every planned vault, so new deployments and fundings need no rerun; rerun when the migration's vault inputs change or after approving more confirmations.
+   3. `frontend/deploy/deploy-frontend.sh` - builds, `gcloud storage rsync` to the bucket, cache headers, CDN invalidation.
 4. Data:
    - Until the embargo is lifted, load only synthetic data on the public VM:
      `backend/deploy/tunnel-db.sh` (keep open), then

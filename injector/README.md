@@ -90,6 +90,40 @@ Flags:
   (reported as warnings);
 - every referenced validator has a vault row (hard error).
 
+## Vault catalog
+
+`build_vault_catalog.py` writes the static file the `/vault` page loads
+(default `frontend/public/vault-catalog.json`). Standard library only; it
+imports harmony-migration's `airdrop/tools/vault_batch.py` for the audited
+`GovernorDelegator` artifact, the CREATE2 address, and the cutoff-checked
+Harmony RPC.
+
+```sh
+E=../data/confirmed-wallets/confirmed-wallets-<time>-decision-approved-vault-pending-vault-shares.csv
+python3 build_vault_catalog.py --migration-repo ~/git/harmony-migration --portal-export $E   # mainnet
+python3 build_vault_catalog.py --chain-id 11155111 --portal-export $E \
+  --out ../frontend/public/vault-catalog.sepolia.json                                    # Sepolia rehearsal
+```
+
+`--portal-export` (repeatable) takes confirmed-wallets `*-vault-shares.csv`
+exports. Each approved position must be inactive stake at the cutoff with a
+matching delegation; it moves to the `confirmed` stage. The catalog records each
+export's name, SHA-256 and time.
+
+For each planned vault (validators whose governor is not on hold) it writes
+the CREATE2 address for the chain's ONE token, the validator's Harmony name and
+commission rate at the cutoff block, the initial governor, and totals of the
+positive cutoff delegations by stage. It joins
+`artifacts/cutoff-20260910/state/staked-to-vault-by-delegation-rpc.csv` with
+the stage policy and the vault-share routing exceptions, and stops unless:
+
+- every stage total equals `validator-vault-stages.csv` for that validator;
+- each validator's delegation count and stake equal Harmony's own record at the
+  cutoff block.
+
+`--start-block` defaults to the earliest deployment recorded for the chain in
+`airdrop/vault/deployments-*.csv` and `airdrop/runs/*/deployments-*.csv`.
+
 ## Embargo
 
 The inputs are under the numerical embargo described in
