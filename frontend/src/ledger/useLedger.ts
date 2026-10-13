@@ -1,17 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { harmonyLedgerTx, type SignatureScheme } from "@hcp/shared";
-import { keccak256, recoverAddress, recoverMessageAddress, stringToBytes, type Address, type Hex } from "viem";
+import { hexToBytes, keccak256, recoverAddress, recoverMessageAddress, stringToBytes, type Address, type Hex } from "viem";
 import {
   detectApp,
   ethGetAddress,
   ethSignPersonalMessage,
+  ethSignTransaction,
+  HARMONY_APP_CANNOT_SIGN,
   LEGACY_HARMONY_PATH,
   ledgerErrorText,
+  ledgerTxErrorText,
   legacyGetAddress,
   legacySignTx,
   PATH_SCHEMES,
   type LedgerApp,
   type PathScheme,
+  type TransactionSignature,
 } from "./apps";
 import { LedgerError, WebHidLedger, webHidSupported } from "./transport";
 
@@ -134,8 +138,25 @@ export function useLedger() {
     return { signature, scheme: legacy ? "harmony_ledger_tx" : "personal_sign" };
   }
 
+  /** Signs an unsigned typed Ethereum transaction with the selected account. Ethereum app only. */
+  async function signTransaction(unsigned: Hex, expected: string): Promise<TransactionSignature> {
+    const ledger = device.current;
+    const account = accounts[selected];
+    if (!ledger || !app || !account) throw new LedgerError("Connect the Ledger first.");
+    if (account.address.toLowerCase() !== expected.toLowerCase()) {
+      throw new LedgerError("The selected Ledger address changed. Try again.");
+    }
+    if (app.kind !== "ethereum") throw new LedgerError(HARMONY_APP_CANNOT_SIGN);
+    try {
+      return await ethSignTransaction(ledger.apdu, account.path, hexToBytes(unsigned));
+    } catch (err) {
+      throw new LedgerError(ledgerTxErrorText(err));
+    }
+  }
+
   return {
     supported: webHidSupported(),
+    canSignTransactions: app?.kind === "ethereum",
     app,
     scheme,
     accounts,
@@ -148,6 +169,7 @@ export function useLedger() {
     changeScheme,
     select: setSelected,
     sign,
+    signTransaction,
   };
 }
 

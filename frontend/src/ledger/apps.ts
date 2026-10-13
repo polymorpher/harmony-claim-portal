@@ -145,6 +145,35 @@ export async function ethSignPersonalMessage(apdu: Apdu, path: string, message: 
   return bytesToHex(concat(response.subarray(1, 65), Uint8Array.of(v)));
 }
 
+export interface TransactionSignature {
+  yParity: number;
+  r: Hex;
+  s: Hex;
+}
+
+/**
+ * Ethereum-app SIGN_TX for a typed (EIP-2718) transaction: `unsigned` is the
+ * type byte and RLP payload that get hashed for signing. Chunked like
+ * hw-app-eth, 150 bytes per APDU, the path at the front of the first.
+ * Contract calls need Blind signing turned on in the app's settings.
+ */
+export async function ethSignTransaction(apdu: Apdu, path: string, unsigned: Uint8Array): Promise<TransactionSignature> {
+  const pathBytes = encodePath(path);
+  const firstRoom = 150 - pathBytes.length;
+  const chunks: Uint8Array[] = [concat(pathBytes, unsigned.subarray(0, firstRoom))];
+  for (let offset = firstRoom; offset < unsigned.length; offset += 150) {
+    chunks.push(unsigned.subarray(offset, offset + 150));
+  }
+  let response: Uint8Array = new Uint8Array(0);
+  for (let i = 0; i < chunks.length; i++) {
+    response = await apdu(CLA_APP, 0x04, i === 0 ? 0x00 : 0x80, 0x00, chunks[i]);
+  }
+  if (response.length < 65) throw new LedgerError("The Ledger returned an incomplete signature.");
+  const v = response[0] >= 27 ? response[0] - 27 : response[0];
+  if (v > 1) throw new LedgerError("The Ledger returned a signature this page cannot use. Try again.");
+  return { yParity: v, r: bytesToHex(response.subarray(1, 33)), s: bytesToHex(response.subarray(33, 65)) };
+}
+
 /** Pre-2025 Harmony app: GET_PUBLIC_KEY in silent mode returns the one1 address. */
 export async function legacyGetAddress(apdu: Apdu): Promise<Address> {
   const r = await apdu(CLA_APP, 0x02, 0x00, 0x01);
@@ -197,3 +226,20 @@ export function ledgerErrorText(err: unknown): string {
   if (err instanceof Error && err.message) return err.message;
   return "Something went wrong while talking to the Ledger.";
 }
+
+/** Like ledgerErrorText, for SIGN_TX: the Ethereum app answers 0x6a80 when Blind signing is off. */
+export function ledgerTxErrorText(err: unknown): string {
+  if (err instanceof LedgerStatusError && err.status === 0x6a80) {
+    return "The Ethereum app refused the transaction. Turn on Blind signing in the app's settings on the Ledger, then try again.";
+  }
+  return ledgerErrorText(err);
+}
+
+/**
+ * Why a Harmony Ledger app cannot send this page's transactions. The 2025 app
+ * is Ledger's Ethereum app built for chain 1666600000 and refuses any other
+ * chain ID; the older app only signs Harmony transactions. Neither has the
+ * Ethereum app's paths, so an address on 44'/1023' cannot sign for Ethereum.
+ */
+export const HARMONY_APP_CANNOT_SIGN =
+  "The Harmony apps on a Ledger only sign Harmony transactions, so they cannot send Ethereum transactions. This page shows the address, but withdrawing or depositing needs a wallet that can sign on Ethereum for it.";

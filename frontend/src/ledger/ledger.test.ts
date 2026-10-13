@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { bytesToHex, fromRlp, hexToBytes, keccak256, recoverAddress, stringToBytes, verifyMessage, type Hex } from "viem";
+import {
+  bytesToHex,
+  fromRlp,
+  hexToBytes,
+  keccak256,
+  recoverAddress,
+  recoverTransactionAddress,
+  serializeTransaction,
+  stringToBytes,
+  verifyMessage,
+  type Hex,
+  type TransactionSerializableEIP1559,
+} from "viem";
 import { HDKey, privateKeyToAccount, sign } from "viem/accounts";
 import { harmonyLedgerTx, hexToBech32 } from "@hcp/shared";
 import {
@@ -7,7 +19,9 @@ import {
   encodePath,
   ethGetAddress,
   ethSignPersonalMessage,
+  ethSignTransaction,
   ledgerErrorText,
+  ledgerTxErrorText,
   legacyGetAddress,
   legacySignTx,
   PATH_SCHEMES,
@@ -54,14 +68,37 @@ interface Call {
 }
 
 /** Ethereum-app protocol, as run by the 2025 Harmony app and the Ethereum app. */
-function ethAppDevice(name: string) {
+function ethAppDevice(name: string, { blindSigning = true }: { blindSigning?: boolean } = {}) {
   const calls: Call[] = [];
   let pending: { path: string; expected: number; message: Uint8Array } | null = null;
+  let pendingTx: { path: string; tx: Uint8Array } | null = null;
   const apdu: Apdu = async (cla, ins, p1, p2, data = new Uint8Array(0)) => {
     calls.push({ cla, ins, p1, p2, length: data.length });
     if (cla === 0xb0 && ins === 0x01) return appNameReply(name, "1.15.0");
     if (cla !== 0xe0) throw new LedgerStatusError(0x6e00);
     if (ins === 0x06) return Uint8Array.of(0x01, 1, 15, 0);
+    if (ins === 0x04) {
+      if (p1 === 0x00) {
+        const { path, rest } = decodePath(data);
+        pendingTx = { path, tx: rest.slice() };
+      } else if (p1 === 0x80 && pendingTx) {
+        pendingTx.tx = concat(pendingTx.tx, data);
+      } else {
+        throw new LedgerStatusError(0x6b00);
+      }
+      // the app knows the end from the RLP list header after the type byte
+      const tx = pendingTx.tx;
+      if (tx.length < 2) return new Uint8Array(0);
+      const header = tx[1] <= 0xf7 ? 1 : 1 + (tx[1] - 0xf7);
+      if (tx.length < 1 + header) return new Uint8Array(0);
+      const body = tx[1] <= 0xf7 ? tx[1] - 0xc0 : Number(BigInt(bytesToHex(tx.subarray(2, 1 + header))));
+      if (tx.length < 1 + header + body) return new Uint8Array(0);
+      const { path } = pendingTx;
+      pendingTx = null;
+      if (!blindSigning) throw new LedgerStatusError(0x6a80);
+      const { r, s, yParity } = await sign({ hash: keccak256(tx), privateKey: privateKeyAt(path) });
+      return concat([yParity ?? 0], hexToBytes(r, { size: 32 }), hexToBytes(s, { size: 32 }));
+    }
     if (ins === 0x02) {
       const account = accountAt(decodePath(data).path);
       const publicKey = hexToBytes(account.publicKey);
@@ -222,6 +259,51 @@ describe("Ethereum-app signing (2025 Harmony app, Ethereum app)", () => {
     const signature = await ethSignPersonalMessage(device.apdu, path, stringToBytes("short"));
     expect(await verifyMessage({ address: accountAt(path).address, message: "short", signature })).toBe(true);
     expect(device.calls.filter((c) => c.ins === 0x08)).toHaveLength(1);
+  });
+});
+
+describe("Ethereum-app transaction signing", () => {
+  const unsignedCall = (data: Hex): TransactionSerializableEIP1559 => ({
+    type: "eip1559",
+    chainId: 1,
+    nonce: 7,
+    gas: 120_000n,
+    maxFeePerGas: 300_000_000n,
+    maxPriorityFeePerGas: 1_000_000n,
+    to: "0xb75B9f48CF1e66e89727364c4df1d90FD84F6ba8",
+    value: 0n,
+    data,
+  });
+
+  it("signs an EIP-1559 contract call across several chunks", async () => {
+    const device = ethAppDevice("Ethereum");
+    const path = PATH_SCHEMES["ledger-live"].path(0);
+    const tx = unsignedCall(`0x00f714ce${"ab".repeat(400)}`);
+    const signature = await ethSignTransaction(device.apdu, path, hexToBytes(serializeTransaction(tx)));
+    const signed = serializeTransaction(tx, signature);
+    expect(await recoverTransactionAddress({ serializedTransaction: signed })).toBe(accountAt(path).address);
+    const chunks = device.calls.filter((c) => c.ins === 0x04);
+    expect(chunks.length).toBeGreaterThan(2);
+    expect(chunks.every((c) => c.length <= 150)).toBe(true);
+    expect(chunks.map((c) => c.p1)).toEqual([0x00, ...Array(chunks.length - 1).fill(0x80)]);
+  });
+
+  it("signs a short call in one chunk", async () => {
+    const device = ethAppDevice("Ethereum");
+    const path = PATH_SCHEMES.bip44.path(3);
+    const tx = unsignedCall("0x24a47aeb");
+    const signature = await ethSignTransaction(device.apdu, path, hexToBytes(serializeTransaction(tx)));
+    expect(await recoverTransactionAddress({ serializedTransaction: serializeTransaction(tx, signature) })).toBe(
+      accountAt(path).address,
+    );
+    expect(device.calls.filter((c) => c.ins === 0x04)).toHaveLength(1);
+  });
+
+  it("explains a refusal when Blind signing is off", async () => {
+    const device = ethAppDevice("Ethereum", { blindSigning: false });
+    const unsigned = hexToBytes(serializeTransaction(unsignedCall("0x24a47aeb")));
+    const err = await ethSignTransaction(device.apdu, PATH_SCHEMES.bip44.path(0), unsigned).catch((e: unknown) => e);
+    expect(ledgerTxErrorText(err)).toMatch(/Blind signing/);
   });
 });
 
