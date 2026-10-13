@@ -4,6 +4,7 @@ import { useAccount, useConnect, useDisconnect } from "wagmi";
 import { ApiRequestError, fetchClaim, fetchMeta } from "./api";
 import { ClaimView } from "./ClaimView";
 import { formatUtc, looksLikeAddress, one, shortAddress } from "./format";
+import { Nav } from "./Nav";
 import { connectErrorText, isConnecting } from "./wallet";
 import { walletConnectConnector } from "./wagmi";
 
@@ -81,16 +82,13 @@ export function App() {
 
   return (
     <div className="page">
-      <nav className="nav" aria-label="Pages">
-        <a href="/" aria-current="page">Claim lookup</a>
-        <a href="/confirm">Confirm activity</a>
-      </nav>
+      <Nav current="/" />
       <header className="header">
         <div>
           <h1>Harmony migration claim lookup</h1>
           <p className="sub">
             See how your native ONE, WONE, and staking claims at the cutoff map to Ethereum ERC-20 ONE,
-            validator vault shares, or a policy-specific recovery route.
+            governor vault shares, or a policy-specific recovery route.
           </p>
         </div>
       </header>

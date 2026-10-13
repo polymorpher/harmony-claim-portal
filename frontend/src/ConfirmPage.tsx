@@ -4,18 +4,11 @@ import { useAccount, useConnect, useDisconnect, useSignMessage } from "wagmi";
 import { hexToBech32, type SignatureScheme } from "@hcp/shared";
 import { ApiRequestError, fetchClaim, fetchConfirmation, fetchMeta, createConfirmationChallenge, submitConfirmation } from "./api";
 import { formatDate, formatUtc, one, shortAddress } from "./format";
-import { PATH_SCHEMES, type LedgerAppKind, type PathScheme } from "./ledger/apps";
-import { useLedger, type LedgerSession } from "./ledger/useLedger";
+import { LEDGER_APP_LABEL, LedgerAccounts } from "./ledger/LedgerAccounts";
+import { useLedger } from "./ledger/useLedger";
+import { Nav } from "./Nav";
 import { connectErrorText, isConnecting, walletErrorText } from "./wallet";
 import { walletConnectConnector } from "./wagmi";
-
-const LEDGER_APP_LABEL: Record<LedgerAppKind, string> = {
-  harmony: "Harmony app",
-  "harmony-legacy": "older Harmony app",
-  ethereum: "Ethereum app",
-};
-
-const ETHEREUM_SCHEMES: PathScheme[] = ["ledger-live", "bip44", "legacy"];
 
 function explain(err: unknown): string {
   if (err instanceof ApiRequestError) {
@@ -26,58 +19,6 @@ function explain(err: unknown): string {
   if (wallet) return wallet;
   if (err instanceof Error && err.message) return err.message;
   return "Something went wrong while contacting the confirmation service.";
-}
-
-function LedgerAccounts({ ledger, locked }: { ledger: LedgerSession; locked: boolean }) {
-  const account = ledger.account;
-  if (!ledger.app || !account) return null;
-  const disabled = locked || ledger.busy;
-  return (
-    <div className="ledger-accounts">
-      {ledger.app.kind === "ethereum" && (
-        <label>
-          Account type
-          <select
-            value={ledger.scheme}
-            disabled={disabled}
-            onChange={(e) => void ledger.changeScheme(e.target.value as PathScheme)}
-          >
-            {ETHEREUM_SCHEMES.map((s) => (
-              <option key={s} value={s}>
-                {PATH_SCHEMES[s].label}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      {ledger.accounts.length > 1 && (
-        <label>
-          Address on this Ledger
-          <select value={ledger.selected} disabled={disabled} onChange={(e) => ledger.select(Number(e.target.value))}>
-            {ledger.accounts.map((a, i) => (
-              <option key={a.path} value={i}>
-                {a.address}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      <dl className="addr">
-        <dt>Address</dt>
-        <dd>
-          <code>{account.address}</code>
-        </dd>
-        <dt>Harmony form</dt>
-        <dd>
-          <code>{hexToBech32(account.address.toLowerCase())}</code>
-        </dd>
-        <dt>Path</dt>
-        <dd>
-          <code>{account.path}</code>
-        </dd>
-      </dl>
-    </div>
-  );
 }
 
 export function ConfirmPage() {
@@ -159,10 +100,7 @@ export function ConfirmPage() {
 
   return (
     <div className="page">
-      <nav className="nav" aria-label="Pages">
-        <a href="/">Claim lookup</a>
-        <a href="/confirm" aria-current="page">Confirm activity</a>
-      </nav>
+      <Nav current="/confirm" />
       <header className="header">
         <h1>Confirm wallet activity</h1>
         <p className="sub">
