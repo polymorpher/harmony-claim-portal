@@ -17,12 +17,31 @@ bucket="gs://$FRONTEND_BUCKET"
 log "building frontend"
 pnpm install --frozen-lockfile
 pnpm --filter @hcp/shared build
-VITE_WALLETCONNECT_PROJECT_ID="${VITE_WALLETCONNECT_PROJECT_ID:-}" pnpm --filter @hcp/frontend build
+VITE_WALLETCONNECT_PROJECT_ID="${VITE_WALLETCONNECT_PROJECT_ID:-}" \
+  VITE_ETH_RPC_URLS="${VITE_ETH_RPC_URLS:-}" \
+  pnpm --filter @hcp/frontend build
 [ -f frontend/dist/index.html ] || die "frontend/dist/index.html missing after build"
-# /confirm must be a real object. The bucket error page serves index.html with
-# HTTP 404, which a CDN can cache.
-mkdir -p frontend/dist/confirm
+# Only the mainnet catalog is published; rehearsal catalogs stay local.
+rm -f frontend/dist/vault-catalog.*.json
+# /confirm, /vault and /vault/<address> must be real objects. The bucket error
+# page serves index.html with HTTP 404, which a CDN can cache.
+mkdir -p frontend/dist/confirm frontend/dist/vault
 cp frontend/dist/index.html frontend/dist/confirm/index.html
+cp frontend/dist/index.html frontend/dist/vault/index.html
+if [ -f frontend/dist/vault-catalog.json ]; then
+  # Checksummed names only: the page links to them, and a case-insensitive
+  # filesystem cannot hold both spellings. Other spellings fall back to the
+  # error page, which still renders the app.
+  python3 - frontend/dist/vault-catalog.json frontend/dist/index.html frontend/dist/vault <<'PY'
+import json, shutil, sys
+catalog, index, out = sys.argv[1:]
+for v in json.load(open(catalog, encoding="utf-8"))["vaults"]:
+    shutil.copyfile(index, f"{out}/{v['vault']}")
+PY
+else
+  warn "frontend/public/vault-catalog.json is missing; /vault will say the vault list could not be loaded"
+  warn "build it with: python3 injector/build_vault_catalog.py --migration-repo ~/git/harmony-migration"
+fi
 
 log "syncing frontend/dist -> $bucket"
 gc storage rsync frontend/dist "$bucket" --recursive --delete-unmatched-destination-objects
@@ -42,6 +61,19 @@ curl -fsS -X PATCH \
   --data '{"cacheControl":"no-cache","contentType":"text/html"}' \
   "https://storage.googleapis.com/storage/v1/b/${FRONTEND_BUCKET}/o/confirm" \
   >/dev/null
+curl -fsS -X POST \
+  -H "Authorization: Bearer ${token}" \
+  -H "Content-Type: text/html" \
+  -H "Cache-Control: no-cache" \
+  --data-binary @frontend/dist/index.html \
+  "https://storage.googleapis.com/upload/storage/v1/b/${FRONTEND_BUCKET}/o?uploadType=media&name=vault" \
+  >/dev/null
+curl -fsS -X PATCH \
+  -H "Authorization: Bearer ${token}" \
+  -H "Content-Type: application/json" \
+  --data '{"cacheControl":"no-cache","contentType":"text/html"}' \
+  "https://storage.googleapis.com/storage/v1/b/${FRONTEND_BUCKET}/o/vault" \
+  >/dev/null
 
 log "setting cache-control"
 # hashed assets are immutable; html must always be revalidated
@@ -51,6 +83,13 @@ gc storage objects update "$bucket/index.html" \
   --cache-control="no-cache" >/dev/null
 gc storage objects update "$bucket/confirm/index.html" \
   --content-type="text/html" --cache-control="no-cache" >/dev/null
+# vault/<address> objects have no extension, so their type is set here.
+gc storage objects update "$bucket/vault/**" \
+  --content-type="text/html" --cache-control="no-cache" >/dev/null
+if [ -f frontend/dist/vault-catalog.json ]; then
+  gc storage objects update "$bucket/vault-catalog.json" \
+    --content-type="application/json" --cache-control="no-cache" >/dev/null
+fi
 
 log "invalidating CDN cache"
 gc compute url-maps invalidate-cdn-cache "$URL_MAP" --path '/*' --async >/dev/null
