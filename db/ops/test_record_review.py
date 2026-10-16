@@ -116,7 +116,8 @@ class PlannerCase(unittest.TestCase):
 
     def plan(self, *flags, reviews=()):
         d = self.dir
-        write_rows(d / "confirmations.csv", list(self.confirmations[0].keys()), self.confirmations)
+        write_rows(d / "confirmations.csv", list(dict.fromkeys(k for c in self.confirmations for k in c)),
+                   self.confirmations)
         write_rows(d / "vault-shares.csv", list(self.positions[0].keys()), self.positions)
         write_rows(d / "exceptions.csv", ["address", "component", "validator_address", "destination_status",
                                           "amount_atto"], [])
@@ -172,6 +173,20 @@ class DecisionTests(PlannerCase):
         self.assertEqual((rows[0]["status"], rows[0]["note"]), ("rejected", "not the holder"))
         self.assertIn("1 changing an earlier decision", text)
 
+    def test_an_attestation_is_approved_without_a_signer_and_a_wrong_signer_is_not(self):
+        self.confirmations = self.confirmations + [
+            confirmation(4, OUTSIDER, signer="", signature="", signature_scheme="attestation",
+                         attested_by="crypto.com", evidence_sha256="ab" * 32),
+            confirmation(5, "0x" + "ee" * 20, signer=ALICE),
+        ]
+        code, rows, text = self.plan("--approve", "--confirmation-id", "4", "--label", "attested-1")
+        self.assertEqual(code, 0, text)
+        self.assertEqual([(r["confirmation_id"], r["address"], r["batch_id"]) for r in rows],
+                         [("4", OUTSIDER, "attested-1")])
+        code, _, text = self.plan("--approve", "--confirmation-id", "5")
+        self.assertEqual(code, 2)
+        self.assertIn(f"signer {ALICE} is not", text)
+
 
 class SentWalletTests(PlannerCase):
     approved = [review(1, 1, ALICE, "queued"), review(2, 2, BOB, "queued")]
@@ -185,6 +200,16 @@ class SentWalletTests(PlannerCase):
                          [(ALICE, "included", "wallet:confirmed-wallets-1"), (BOB, "included", "wallet:confirmed-wallets-1")])
         self.assertEqual(rows[0]["note"], f"manifest={sha}")
         self.assertIn("1 recipient, 5 ONE, to addresses without a confirmation", text)
+
+    def test_marks_an_approved_attestation(self):
+        self.confirmations = self.confirmations + [
+            confirmation(4, OUTSIDER, wallet=5, signer="", signature="", signature_scheme="attestation",
+                         attested_by="crypto.com", evidence_sha256="ab" * 32)]
+        run = safe_run(self.dir / "cryptocom-attested-1", [(OUTSIDER, 5)])
+        code, rows, text = self.plan("--sent", "wallet", "--from-run", str(run),
+                                     reviews=[review(9, 4, OUTSIDER, "queued")])
+        self.assertEqual(code, 0, text)
+        self.assertEqual([(r["confirmation_id"], r["batch_id"]) for r in rows], [("4", "wallet:cryptocom-attested-1")])
 
     def test_one_transaction_of_the_run(self):
         run = safe_run(self.dir / "confirmed-wallets-1", [(ALICE, 1000), (BOB, 2000)], per_tx=1)

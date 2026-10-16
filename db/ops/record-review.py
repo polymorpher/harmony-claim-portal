@@ -291,7 +291,7 @@ class Planner:
                     self.problems.append(
                         f"{target.where}: confirmation {c.id} ({c.address}) was signed under "
                         f"{c.data_version} / {c.policy_version}, which is no longer the candidate set")
-                if not c.signer_matches:
+                if not c.attested and not c.signer_matches:
                     self.problems.append(f"{target.where}: confirmation {c.id}: signer {c.signer} is not {c.address}")
                 if not c.in_ledger:
                     self.problems.append(f"{target.where}: {c.address} is not in the loaded ledger")

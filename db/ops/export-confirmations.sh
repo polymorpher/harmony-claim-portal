@@ -6,7 +6,8 @@
 # Writes confirmations.csv, reviews.csv and manifest.json. The manifest hash
 # covers the confirmation CSV. Signatures in that CSV are unverified input:
 # the batch job must recover each signer before promoting a wallet, using the
-# row's signature_scheme (see db/ops/README.md).
+# row's signature_scheme (see db/ops/README.md). Rows with scheme attestation
+# have no signature; check the attester's statement against evidence_sha256.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,7 +42,7 @@ if [ -f "$secrets/pgpass" ]; then export PGPASSFILE="$secrets/pgpass"; fi
 
 log "exporting confirmations"
 psql "$dsn" -v ON_ERROR_STOP=1 <<EOF
-\\copy (SELECT id, address, data_version, policy_version, stage_reason, message, signature, signature_scheme, signer, created_at FROM confirm.confirmations ORDER BY created_at, address) TO '${out}/confirmations.csv' WITH (FORMAT csv, HEADER true)
+\\copy (SELECT id, address, data_version, policy_version, stage_reason, message, signature, signature_scheme, signer, created_at, to_jsonb(c) ->> 'attested_by' AS attested_by, to_jsonb(c) ->> 'evidence_sha256' AS evidence_sha256 FROM confirm.confirmations c ORDER BY created_at, address) TO '${out}/confirmations.csv' WITH (FORMAT csv, HEADER true)
 \\copy (SELECT r.id, r.confirmation_id, c.address, c.data_version, r.status, r.batch_id, r.note, r.reviewed_at FROM confirm.reviews r JOIN confirm.confirmations c ON c.id = r.confirmation_id ORDER BY r.reviewed_at, r.id) TO '${out}/reviews.csv' WITH (FORMAT csv, HEADER true)
 EOF
 

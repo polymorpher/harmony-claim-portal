@@ -102,7 +102,11 @@ CSV_COLUMNS = [
     "signature",
     "signature_scheme",
     "message",
+    "attested_by",
+    "evidence_sha256",
 ]
+
+ATTESTATION = "attestation"
 
 # vault-batch reads this file by column name: address, validator_address and
 # expected_shares_atto, and it refuses non-zero rows whose destination_status is
@@ -337,6 +341,8 @@ class Confirmation:
         self.stage_reason = (row.get("stage_reason") or "").strip()
         self.signature = (row.get("signature") or "").strip()
         self.signature_scheme = (row.get("signature_scheme") or "").strip() or "personal_sign"
+        self.attested_by = (row.get("attested_by") or "").strip()
+        self.evidence_sha256 = (row.get("evidence_sha256") or "").strip()
         self.message = row.get("message") or ""
         self.still_candidate = pg_bool(row.get("still_candidate"))
         self.in_ledger = pg_bool(row.get("in_ledger")) or False
@@ -386,6 +392,11 @@ class Confirmation:
             self.wallet_status = "blocked"
         else:
             self.wallet_status = "pending"
+
+    @property
+    def attested(self) -> bool:
+        """Recorded by db/ops/record-attestation.sh: no signature or signer, only who attested."""
+        return self.signature_scheme == ATTESTATION
 
     @property
     def signer_matches(self) -> bool:
@@ -466,7 +477,7 @@ class Confirmation:
             "confirmed_at_utc": self.confirmed_at,
             "address": self.address,
             "signer": self.signer,
-            "signer_matches": yes_no(self.signer_matches),
+            "signer_matches": "n/a" if self.attested else yes_no(self.signer_matches),
             "data_version": self.data_version,
             "policy_version": self.policy_version,
             "stage_reason": self.stage_reason,
@@ -520,6 +531,8 @@ class Confirmation:
             "signature": self.signature,
             "signature_scheme": self.signature_scheme,
             "message": self.message,
+            "attested_by": self.attested_by,
+            "evidence_sha256": self.evidence_sha256,
         }
 
 
@@ -623,7 +636,8 @@ class Stats:
         self.by_version = Counter(f"{c.data_version} / {c.policy_version}" for c in items)
         self.still_candidate = sum(1 for c in items if c.still_candidate)
         self.in_ledger = sum(1 for c in items if c.in_ledger)
-        self.signer_mismatch = sum(1 for c in items if not c.signer_matches)
+        self.signer_mismatch = sum(1 for c in items if not c.attested and not c.signer_matches)
+        self.attested_by = Counter(c.attested_by for c in items if c.attested)
         self.not_deferred = sum(1 for c in items if c.in_ledger and c.ledger_stage != "deferred")
         self.decisions = Counter(c.decision for c in items)
         times = sorted(c.confirmed_at for c in items if c.confirmed_at)
@@ -781,6 +795,10 @@ def render_record(index: int, c: Confirmation) -> List[str]:
             activity += f" ({c.last_activity_type})"
         lines.append(f"{pad}last activity {activity}")
 
+    if c.attested:
+        lines.append(f"{pad}attested by   {c.attested_by} (no wallet signature)")
+        lines.append(f"{pad}evidence      sha256 {c.evidence_sha256}")
+        return lines
     signer_note = "matches address" if c.signer_matches else "DOES NOT MATCH ADDRESS"
     lines.append(f"{pad}signer        {c.signer or '-'} ({signer_note})")
     lines.append(f"{pad}signature     {c.signature}")
@@ -797,7 +815,10 @@ def render_compact(items: List[Confirmation]) -> List[str]:
     lines = [header, "-" * len(header)]
     short = {"none": "-", "unknown": "?"}
     for c in items:
-        sig = f"{c.signature[:10]}…{c.signature[-8:]}" if len(c.signature) > 20 else c.signature
+        if c.attested:
+            sig = f"attested by {c.attested_by}"
+        else:
+            sig = f"{c.signature[:10]}…{c.signature[-8:]}" if len(c.signature) > 20 else c.signature
         confirmed = c.confirmed_at.replace("T", " ").replace("Z", "")
         lines.append(
             f"{c.id:>6}  {confirmed:<19}  {c.address:<42}  {REASON_SHORT.get(c.stage_reason, c.stage_reason)[:19]:<19}  "
@@ -873,6 +894,11 @@ def render_stats(stats: Stats) -> List[str]:
             "that does not parse (see db/ops/review_tracks.py)"
         )
     lines.append(f"  signer mismatch         {stats.signer_mismatch:,}")
+    if stats.attested_by:
+        lines.append(
+            "  attested, not signed    "
+            + " | ".join(f"{who} {n:,}" for who, n in sorted(stats.attested_by.items()))
+        )
     lines.append(f"  first / last            {display_time(stats.first)}  /  {display_time(stats.last)}")
     lines.append(
         f"  confirmed allocation    {format_one(stats.total_allocation)} ONE"

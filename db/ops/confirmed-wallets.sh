@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Who has confirmed: wallets that signed on /confirm, with amounts, signatures
-# and review state (approval decision, wallet part sent, vault shares sent).
+# Who has confirmed: wallets that signed on /confirm or were attested with
+# db/ops/record-attestation.sh, with amounts, signatures and review state
+# (approval decision, wallet part sent, vault shares sent).
 #
 #   db/ops/confirmed-wallets.sh            # tunnel to the VM, print the report, close the tunnel
 #   db/ops/confirmed-wallets.sh --csv      # also write data/confirmed-wallets/confirmed-wallets-<UTC time>.csv

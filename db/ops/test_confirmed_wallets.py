@@ -169,6 +169,23 @@ class BuildTests(unittest.TestCase):
         self.assertIn("not in the loaded ledger", text)
         self.assertIn(SIG, text)
 
+    def test_an_attestation_shows_who_attested_instead_of_a_signer(self):
+        sha = "ab" * 32
+        items = mod.build([confirmation(signer="", signature="", signature_scheme="attestation",
+                                        attested_by="crypto.com", evidence_sha256=sha)], [], [])
+        c = items[0]
+        self.assertTrue(c.attested)
+        text = "\n".join(mod.render_record(1, c))
+        self.assertIn("attested by   crypto.com (no wallet signature)", text)
+        self.assertIn(f"evidence      sha256 {sha}", text)
+        self.assertNotIn("DOES NOT MATCH", text)
+        self.assertIn("attested by crypto.com", "\n".join(mod.render_compact(items)))
+        row = c.csv_row()
+        self.assertEqual((row["signer_matches"], row["attested_by"], row["evidence_sha256"]), ("n/a", "crypto.com", sha))
+        stats = "\n".join(mod.render_stats(mod.Stats(items, [])))
+        self.assertIn("signer mismatch         0", stats)
+        self.assertIn("attested, not signed    crypto.com 1", stats)
+
 
 class StatsTests(unittest.TestCase):
     def test_amounts_count_each_wallet_once(self):

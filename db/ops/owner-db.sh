@@ -1,13 +1,15 @@
 # shellcheck shell=bash
 # shellcheck disable=SC2034 # OWNER_DB_* are read by the scripts that source this file
-# Owner-role database access for db/ops/confirmed-wallets.sh and
-# db/ops/record-review.sh. Source after infra/lib.sh; do not execute.
+# Owner-role database access for db/ops/confirmed-wallets.sh,
+# db/ops/record-review.sh and db/ops/record-attestation.sh. Source after
+# infra/lib.sh; do not execute.
 #
 #   OWNER_DB_TUNNEL=1                # default: IAP tunnel to the VM
 #   OWNER_DB_TUNNEL=0 OWNER_DB_URL=… # a URL you already have (or CONFIRM_OWNER_URL / DATABASE_URL)
 #   owner_db_open "$work"            # sets OWNER_DB_URL (without its password) and OWNER_DB_SOURCE;
 #                                    # the password goes to $work/pgpass, exported as PGPASSFILE
 #   owner_db_extract "$work"         # writes the CSV extracts, sets OWNER_DB_LEDGER_VERSION
+#   owner_db_candidates "$work" 0x…  # candidate and ledger rows of the given addresses
 #   owner_db_close                   # ends a tunnel this process opened; safe to call twice
 #
 # The tunnel needs .env (GCP_PROJECT, GCP_ZONE, VM_NAME, DB_TUNNEL_PORT) and a
@@ -171,6 +173,37 @@ _owner_db_copy() {
   psql "$OWNER_DB_URL" -X -q -v ON_ERROR_STOP=1 -f - > "$1"
 }
 
+# owner_db_candidates DIR ADDRESS...: DIR/attest-candidates.csv, the candidate
+# row and ledger stage and amounts of each address (lowercase 0x), for
+# db/ops/record-attestation.py.
+owner_db_candidates() {
+  local dir="$1" list
+  shift
+  list="{$(IFS=,; echo "$*")}"
+  psql "$OWNER_DB_URL" -X -q -v ON_ERROR_STOP=1 -v addresses="$list" -f - > "$dir/attest-candidates.csv" <<'SQL'
+COPY (
+  SELECT
+    w.address,
+    (cand.address IS NOT NULL)                                                     AS is_candidate,
+    cand.account_category,
+    cand.stage_reason,
+    cand.data_version,
+    cand.policy_version,
+    to_char(cand.cutoff_time_utc AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS cutoff_utc,
+    (a.address IS NOT NULL)                                                        AS in_ledger,
+    a.migration_stage,
+    a.issuance_treatment,
+    a.migration_allocation_atto::text,
+    a.migration_wallet_allocation_atto::text,
+    a.migration_staked_to_vault_atto::text
+  FROM unnest(:'addresses'::text[]) WITH ORDINALITY AS w(address, n)
+  LEFT JOIN confirm.candidates cand ON cand.address = w.address
+  LEFT JOIN public.accounts a ON lower(a.address) = w.address
+  ORDER BY w.n
+) TO STDOUT WITH (FORMAT csv, HEADER true)
+SQL
+}
+
 # owner_db_extract DIR: confirmations.csv, vault-shares.csv, exceptions.csv,
 # candidates.csv and reviews.csv.
 owner_db_extract() {
@@ -187,6 +220,9 @@ COPY (
     c.stage_reason,
     c.signature,
     c.signature_scheme,
+    -- to_jsonb: these columns exist from migration 008 on.
+    to_jsonb(c) ->> 'attested_by'                                           AS attested_by,
+    to_jsonb(c) ->> 'evidence_sha256'                                       AS evidence_sha256,
     c.message,
     (cand.address IS NOT NULL)                                              AS still_candidate,
     (a.address IS NOT NULL)                                                 AS in_ledger,
