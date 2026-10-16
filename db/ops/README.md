@@ -257,6 +257,42 @@ on a wallet or vault row means sent, `queued` there means undone. The latest
 row of each kind wins. Rows that do not parse are counted in the report's
 summary and otherwise ignored, so write rows with this script, not by hand.
 
+## Attested confirmations
+
+Some holders cannot sign on `/confirm`, for example an exchange that holds the
+key, and confirm activity to us directly instead. `record-attestation.sh`
+records that as a confirmation with `signature_scheme` `attestation`: no
+signature and no signer, but who attested (`attested_by`) and the SHA-256 of
+their statement (`evidence_sha256`). It needs migration 008 and a backend from
+the same release, which reads rows without a signature.
+
+```sh
+# 1. record (dry run, then --apply); 0x or one1 addresses
+db/ops/record-attestation.sh --address one1… --address one1… \
+  --attested-by crypto.com --evidence crypto-com-statement.pdf --note "ticket 1234, 2026-10-13"
+db/ops/record-attestation.sh … --apply
+# 2. approve, then mark deliveries, as for any confirmation
+db/ops/record-review.sh --approve --from-csv data/attestations/attestation-plan-<time>.csv --label attested-1 --apply
+db/ops/record-review.sh --sent wallet --from-run …/cryptocom-attested-1 --apply
+```
+
+- **Checks.** It refuses an address that is not a candidate in the loaded set,
+  is not in the loaded ledger or not `deferred` there, or already confirmed
+  under that set. The insert repeats the candidate and confirmation checks in
+  its transaction.
+- **Binding.** The row takes the candidate's data and policy versions, like a
+  signature. The site then shows the wallet as confirmed and refuses a
+  signature for it. After a new candidate set, record it again.
+- **Evidence.** The database keeps only the hash. Keep the statement itself
+  with the batch it pays, and check it against `evidence_sha256`.
+- **Who can write it.** Only the table owner. A trigger refuses an attestation
+  from `claim_confirm`, which keeps its table-level INSERT for signatures.
+- **Afterwards.** `confirmed-wallets.sh` shows `attested by …` in place of the
+  signature, counts these rows under "attested, not signed" and not as signer
+  mismatches, and adds `attested_by` and `evidence_sha256` to the CSV, where
+  `signer_matches` is `n/a`. `record-review.sh --approve` skips the signer
+  check for them; every other check applies.
+
 ## Export and backup
 
 ```sh
@@ -304,7 +340,8 @@ The signed text is the `message` column exactly, UTF-8.
   `types.NewEIP155Signer(big.NewInt(1)).Hash(tx)` for that transaction. It
   can never be included in a block: a gas limit of 0 is below intrinsic gas.
 
-In both cases the recovered address must equal `address`.
+In both cases the recovered address must equal `address`. `attestation` rows
+have no signature; see "Attested confirmations".
 
 Deploy enables `harmony-claim-backup.timer`, which runs `backup-confirm.sh`
 daily, keeps 14 dumps under `/var/lib/harmony-claim-api/backups`, and uploads
