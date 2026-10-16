@@ -305,7 +305,7 @@ describe("confirmation API", () => {
   });
 
   it("keeps the first signature when a different one is submitted later", async () => {
-    const first = store.confirmations[0].signature;
+    const first = store.confirmations[0].signature as string;
     const otherSignature = `0x${"ab".repeat(65)}`;
     expect(otherSignature.toLowerCase()).not.toBe(first.toLowerCase());
     const res = await app.inject({
@@ -359,6 +359,41 @@ describe("confirmation API", () => {
     expect(res.statusCode).toBe(409);
     expect(res.json().message).toMatch(/migration data was updated/);
     expect(store.confirmations.filter((row) => row.address === addr)).toHaveLength(0);
+  });
+
+  it("treats an attested wallet as confirmed and refuses a signature for it", async () => {
+    const fresh = privateKeyToAccount(generatePrivateKey());
+    const addr = fresh.address.toLowerCase();
+    store.candidates.set(addr, candidate(addr));
+    const { body, signature } = await issueAndSign(addr, fresh);
+    store.confirmations.push({
+      address: addr,
+      data_version: "2026-09-17",
+      policy_version: "migration-policy-20260917",
+      stage_reason: "wallet activity predates initial window",
+      message: "Attested by: crypto.com",
+      signature: null,
+      signature_scheme: "attestation",
+      signer: null,
+      created_at: "2026-10-14T20:00:00.000Z",
+    });
+
+    const status = await app.inject({ method: "GET", url: `/api/v1/confirmations/${addr}` });
+    expect(status.statusCode).toBe(200);
+    expect(status.json().confirmation.recorded_at).toBe("2026-10-14T20:00:00.000Z");
+
+    const challenge = await app.inject({
+      method: "POST",
+      url: "/api/v1/confirmations/challenges",
+      headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.24" },
+      payload: { address: addr },
+    });
+    expect(challenge.statusCode).toBe(409);
+
+    const res = await submit({ address: addr, nonce: body.nonce, issued_at: body.issued_at, signature }, "203.0.113.24");
+    expect(res.statusCode).toBe(409);
+    expect(res.json().message).toBe("This wallet has already confirmed activity.");
+    expect(store.confirmations.filter((row) => row.address === addr)).toHaveLength(1);
   });
 });
 

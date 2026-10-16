@@ -11,15 +11,16 @@ export interface CandidateRow {
   cutoff_time_utc: string;
 }
 
+/** `attestation` rows are written by db/ops/record-attestation.sh and carry no signature or signer. */
 export interface ConfirmationRow {
   address: string;
   data_version: string;
   policy_version: string;
   stage_reason: string;
   message: string;
-  signature: string;
-  signature_scheme: SignatureScheme;
-  signer: string;
+  signature: string | null;
+  signature_scheme: SignatureScheme | "attestation";
+  signer: string | null;
   created_at: string;
 }
 
@@ -97,7 +98,12 @@ export class PgConfirmStore implements ConfirmStore {
     );
     const row = res.rows[0];
     if (!row) return null;
-    return { ...row, address: trim(row.address), signer: trim(row.signer), created_at: iso(row.created_at) };
+    return {
+      ...row,
+      address: trim(row.address),
+      signer: row.signer === null ? null : trim(row.signer),
+      created_at: iso(row.created_at),
+    };
   }
 
   async insertConfirmation(input: ConfirmationInsert): Promise<InsertResult> {

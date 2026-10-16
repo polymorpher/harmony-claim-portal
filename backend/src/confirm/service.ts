@@ -190,8 +190,8 @@ export class ConfirmService {
     });
   }
 
-  private replay(address: string, existing: { signature: string; data_version: string; policy_version: string; created_at: string }, signature: string): ConfirmationReceipt {
-    if (!sameSignature(existing.signature, signature)) {
+  private replay(address: string, existing: { signature: string | null; data_version: string; policy_version: string; created_at: string }, signature: string): ConfirmationReceipt {
+    if (existing.signature === null || !sameSignature(existing.signature, signature)) {
       throw new ConfirmError(409, ALREADY_CONFIRMED);
     }
     return {
