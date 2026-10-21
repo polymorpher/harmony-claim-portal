@@ -19,9 +19,10 @@ infra/cloudflare/{lib,setup-dns}.sh     proxied A records, _acme-challenge CNAME
 db/migrations/001_schema.sql   schema (amounts NUMERIC(78,0) in atto-ONE)
 db/migrations/005_confirm_schema.sql   confirmation candidates and append-only signatures
 db/migrations/006_confirm_signature_scheme.sql   records how each confirmation was signed
+db/migrations/009_tx_archive.sql   transaction archive for /history (archive_meta, archive_records)
 db/ops/                        role split, candidate load, confirmed-wallets report, export, review, backup (see db/ops/README.md)
 db/seed/reason_texts.json      reason_code -> user-facing title/text (+ apply-reason-texts.sh)
-injector/                      Python loader: harmony-migration CSVs -> Postgres (COPY + atomic swap); vault catalog builder
+injector/                      Python loaders: harmony-migration CSVs -> Postgres (COPY + atomic swap) for claims and the transaction archive; vault catalog builder
 backend/                       lookup API, confirmation API, and the proxy in front of them
 frontend/                      Vite + React + wagmi/viem UI, deploy script
 shared/                        @hcp/shared: API types, BigInt atto formatting, one1 bech32
@@ -52,6 +53,27 @@ Single-address lookups only; there are no list, search or aggregate endpoints.
   `EXPOSE_CONTRACT_AMOUNTS=true`, while reviewed next-stage or not-issued
   treatment is still shown.
 
+Transaction archive (`/history`), served by the same lookup process and role:
+
+- `GET /api/v1/archive/meta` - archive coverage (shard, branch, block range and
+  times), minimum value, coverage notes, data version, row counts;
+  `available: false` before the first load
+- `GET /api/v1/archive/address/:address?before=<id>&limit=<1..100>` - records
+  sent or received by one address, newest first, 50 per page; pass
+  `next_before` as `before` for the next page. Self-transfers appear once.
+- `GET /api/v1/archive/tx/:hash` - every record of one transaction, by Harmony
+  hash or Ethereum-style hash: the transaction, its internal transfers, its
+  cross-shard receipt with the destination credit, or its staking operation,
+  on both branches when a rolled-back transaction was included again. 404 when
+  nothing is archived.
+
+Each record carries `record_type` (`transaction`, `internal`, `cross_shard`,
+`staking`), `kind`, `shard`/`to_shard`, `branch` (`canonical` or
+`rolled_back`, the blocks abandoned by the August 2026 rollback), block number
+and hash, time, both hashes, `from`/`to`, `value_atto`/`value_one`, `fee_atto`,
+`status` (`failed` also marks an internal transfer inside a reverted call),
+`method`, and for cross-shard receipts `ancestor_reverted` and `destination`.
+
 Rate limit: 30 requests/minute per browser (client IP plus User-Agent) and
 300/minute per IP. The client IP is `CF-Connecting-IP`, then the first
 `X-Forwarded-For` hop, then the socket. The looked-up address is not part of
@@ -79,6 +101,28 @@ Confirmation routes:
 - `GET /api/v1/confirmations/:address` - eligibility and whether a signature is already stored
 - `POST /api/v1/confirmations/challenges` - a random nonce and the exact message to sign; nothing is stored
 - `POST /api/v1/confirmations` - the signature, nonce, issued time, and `signature_scheme` (`personal_sign`, the default, or `harmony_ledger_tx`). The server rebuilds the message, checks it is still inside the time window, and verifies the signature under that scheme
+
+## Transaction history (`/history`)
+
+The Harmony explorer is shut down. `/history` keeps a fixed record of every
+Harmony transaction that moved at least 1 ONE from 2025-01-01 until the chain
+stopped: plain transactions (failed ones marked), internal transfers made by
+contracts, cross-shard receipts (including those created inside reverted
+calls before the epoch-2964 fix), and staking amounts, on shards 0 and 1, plus
+the blocks that the August 2026 rollback abandoned, labeled as never final.
+
+Enter an address (`0x…` or `one1…`) or a transaction hash. `/history/address/<address>`
+lists the address's records newest first; `/history/tx/<hash>` shows one
+transaction. The footer shows the archive's block coverage and its notes (for
+example, a range known to hold no transactions).
+
+The archive is built by harmony-migration (`docs/tx-archive.md`, `make
+tx-archive`) and loaded with `injector/inject_archive.py`. It is chain data,
+not claim results, and is not under the numerical embargo. The 2026-10-21
+archive has 1.12 million records: about 650 MB in PostgreSQL (280 MB table,
+370 MB indexes), and a load takes about 15 seconds. Address pages and hash
+lookups are index scans that take well under a millisecond, even for the
+busiest address.
 
 ## Governor Vaults (`/vault`)
 
@@ -170,6 +214,8 @@ db/seed/apply-reason-texts.sh "$(scripts/dev-postgres.sh url claims)"
 python3 -m venv injector/.venv && injector/.venv/bin/pip install -e injector
 injector/.venv/bin/python injector/inject_claims.py --fixture \
   --dsn "$(scripts/dev-postgres.sh url claims)" --data-version fixture-1
+injector/.venv/bin/python injector/inject_archive.py --fixture \
+  --dsn "$(scripts/dev-postgres.sh url claims)" --data-version archive-fixture-1
 
 # roles, then lookup :8081, confirm :8082, proxy :8080, frontend :5173
 db/ops/setup-roles.sh --local
@@ -185,7 +231,7 @@ psql "$(grep '^DATABASE_URL=' backend/.env.owner | cut -d= -f2-)" -v ON_ERROR_ST
 pnpm --filter @hcp/backend test                                        # unit + http tests
 pnpm --filter @hcp/frontend test                                       # Ledger framing and signing against emulated apps, vault logic
 pnpm test:ops                                                          # candidate selection, review, vault catalog
-TEST_DATABASE_URL="$(scripts/dev-postgres.sh url claims)" pnpm --filter @hcp/backend test   # + integration
+TEST_DATABASE_URL="$(scripts/dev-postgres.sh url claims)" pnpm --filter @hcp/backend test   # + integration (claims and archive fixtures)
 pnpm build                                                             # shared, backend, frontend
 pnpm shellcheck
 pnpm test:infra                                                        # gcloud scripts against a stub gcloud (offline)
@@ -219,6 +265,11 @@ All scripts are idempotent bash over `gcloud`/`curl`; re-running is safe.
      gate is held unless `--allow-held-routing` is passed; the site then shows
      the held routing status and its preview banner. A load is a staging-schema
      swap, so the API never sees partial data.
+   - Transaction archive (independent of the claim release gates): with the
+     tunnel open, `python3 injector/inject_archive.py --archive-dir <harmony-migration tx-archive output>
+     --dsn "$(backend/deploy/tunnel-db.sh --print-dsn)" --data-version <archive date>`.
+     Run `--dry-run` first; it verifies every file against `manifest.json`.
+     Needs `db/migrations/009_tx_archive.sql`, which `deploy-backend.sh` applies.
    - After a data load that changes the exchange inventory, reload the
      confirmation candidates (`db/ops/load-candidates.sh`, see
      `db/ops/README.md`) so newly listed exchange wallets cannot sign.
