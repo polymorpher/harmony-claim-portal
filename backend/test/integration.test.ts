@@ -135,3 +135,58 @@ suite("integration against fixture database", () => {
     expect(res.json().found).toBe(false);
   });
 });
+
+// Needs `injector/inject_archive.py --fixture` loaded into the same database.
+suite("transaction archive against fixture database", () => {
+  let app: FastifyInstance;
+  let repo: PgRepository;
+  const H = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
+
+  beforeAll(async () => {
+    repo = new PgRepository(url!);
+    app = await buildApp({
+      config: { rateLimitMax: 1000, rateLimitWindow: "1 minute", exposeContractAmounts: false, logLevel: "silent", trustProxy: true },
+      repo,
+      archive: repo.archive,
+    });
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app.close();
+    await repo.close();
+  });
+
+  it("meta comes from archive_meta", async () => {
+    const body = (await app.inject({ method: "GET", url: "/api/v1/archive/meta" })).json();
+    expect(body.available).toBe(true);
+    expect(body.fixture).toBe(true);
+    expect(body.coverage).toHaveLength(2);
+    expect(body.row_counts.archive_records).toBe(9);
+  });
+
+  it("pages an address newest first across record types and shards", async () => {
+    const first = (await app.inject({ method: "GET", url: `/api/v1/archive/address/${ADDR.eoa}?limit=4` })).json();
+    expect(first.records.map((r: { id: string }) => r.id)).toEqual(["9", "8", "7", "6"]);
+    expect(first.records[0]).toMatchObject({ shard: 1, value_one: "42" });
+    expect(first.records[1]).toMatchObject({ branch: "rolled_back" });
+    expect(first.records[3]).toMatchObject({
+      record_type: "cross_shard", to_shard: 1, destination: { status: "credited", block_number: 70074900 },
+    });
+    const rest = (await app.inject({
+      method: "GET", url: `/api/v1/archive/address/${ADDR.eoa}?limit=10&before=${first.next_before}`,
+    })).json();
+    expect(rest.records.map((r: { id: string }) => r.id)).toEqual(["5", "4", "3", "2", "1"]);
+    expect(rest.next_before).toBeNull();
+  });
+
+  it("finds a transaction with its internal transfer by either hash", async () => {
+    for (const hash of [H(2), H(102)]) {
+      const body = (await app.inject({ method: "GET", url: `/api/v1/archive/tx/${hash}` })).json();
+      expect(body.records.map((r: { record_type: string }) => r.record_type)).toEqual(["transaction", "internal"]);
+      expect(body.records[0]).toMatchObject({ method: "0x7ff36ab5", eth_hash: H(102), fee_atto: "9000000000000000" });
+      expect(body.records[1]).toMatchObject({ trace_address: "0", value_one: "12" });
+    }
+    expect((await app.inject({ method: "GET", url: `/api/v1/archive/tx/${H(999)}` })).statusCode).toBe(404);
+  });
+});
