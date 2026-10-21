@@ -10,10 +10,11 @@ dependencies = [
 
 [project.scripts]
 inject-claims = "inject_claims:main"
+inject-archive = "inject_archive:main"
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = ["inject_claims"]
+py-modules = ["inject_claims", "inject_archive"]
