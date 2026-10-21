@@ -28,14 +28,15 @@ csv.field_size_limit(1 << 24)
 
 DEFAULT_DSN = "postgres://claimapi@localhost:5433/claims"
 STAGING = "archive_staging"
-DATA_TABLES = ("archive_meta", "archive_records")
+DATA_TABLES = ("archive_meta", "archive_records", "archive_methods")
 FILES = ("transactions.csv", "internal_transfers.csv", "cross_shard.csv", "staking.csv")
 COLUMNS = (
     "id", "record_type", "kind", "shard", "to_shard", "rolled_back", "block_number", "block_hash",
     "block_time", "tx_index", "trace_address", "tx_hash", "eth_hash", "from_addr", "to_addr",
     "value_atto", "fee_atto", "status", "method", "ancestor_reverted", "dest_status",
-    "dest_block_number", "dest_block_hash", "dest_time",
+    "dest_block_number", "dest_block_hash", "dest_time", "input",
 )
+METHOD_COLUMNS = ("selector", "signature", "verified", "candidates", "source")
 TYPE_ORDER = {"transaction": 0, "cross_shard": 1, "internal": 2, "staking": 3}
 KINDS = {
     "transaction": {"transfer", "call", "create", "xshard_native", "xshard_precompile"},
@@ -87,6 +88,20 @@ def method_bytes(value: str) -> bytes | None:
         raise ArchiveError(f"bad method: {value!r}") from error
 
 
+def calldata_bytes(value: str | None, method: str) -> bytes | None:
+    """Full calldata; it must begin with the recorded selector."""
+    if value in ("", None):
+        if method:
+            raise ArchiveError(f"selector {method} without calldata")
+        return None
+    if not value.startswith("0x") or len(value) % 2 or not value.startswith(method):
+        raise ArchiveError(f"bad calldata starting {value[:12]!r} for selector {method!r}")
+    try:
+        return bytes.fromhex(value[2:])
+    except ValueError as error:
+        raise ArchiveError(f"bad calldata starting {value[:12]!r}") from error
+
+
 def utc(seconds: str | int | None) -> dt.datetime | None:
     if seconds in ("", None):
         return None
@@ -117,13 +132,14 @@ def read_rows(path: Path) -> Iterable[dict[str, str]]:
 def record(record_type: str, kind: str, shard: int, to_shard: int | None, rolled_back: bool, row: dict[str, str],
            tx_hash: bytes, eth_hash: bytes | None, from_addr: bytes, to_addr: bytes | None, value: int,
            fee: int | None, status: int, method: bytes | None = None, trace: str | None = None,
-           ancestor_reverted: bool | None = None, dest: tuple = (None, None, None, None)) -> tuple:
+           ancestor_reverted: bool | None = None, dest: tuple = (None, None, None, None),
+           input_data: bytes | None = None) -> tuple:
     block_number = int(row["block_number"])
     tx_index = int(row["tx_index"])
     key = (int(row["timestamp"]), shard, block_number, tx_index, TYPE_ORDER[record_type], trace_key(trace))
     values = (record_type, kind, shard, to_shard, rolled_back, block_number, raw(row["block_hash"], 32, "block hash"),
               utc(row["timestamp"]), tx_index, trace, tx_hash, eth_hash, from_addr, to_addr, value, fee, status,
-              method, ancestor_reverted, *dest)
+              method, ancestor_reverted, *dest, input_data)
     return key, values
 
 
@@ -160,7 +176,8 @@ def read_archive(directory: Path) -> tuple[list[tuple], dict]:
             "transaction", row["kind"], shard, int(row["to_shard"]), rolled_back, row,
             raw(row["tx_hash"], 32, "tx hash"), eth, raw(row["from"], 20, "from"),
             raw(row["to"], 20, "to", optional=True), check_value(int(row["value_atto"]), "transactions.csv"),
-            int(row["fee_atto"]), flag(row["status"], "status"), method_bytes(row["method"])))
+            int(row["fee_atto"]), flag(row["status"], "status"), method_bytes(row["method"]),
+            input_data=calldata_bytes(row["input"], row["method"]) if "input" in row else None))
 
     for row in read_rows(directory / "internal_transfers.csv"):
         counts["internal_transfers.csv"] += 1
@@ -205,6 +222,7 @@ def read_archive(directory: Path) -> tuple[list[tuple], dict]:
     for name in FILES:
         if counts[name] != manifest["files"][name]["rows"]:
             raise ArchiveError(f"{name}: {counts[name]} rows, manifest says {manifest['files'][name]['rows']}")
+    methods = read_methods(directory, manifest["files"].get("method_names.csv"))
     records.sort(key=lambda item: item[0])
     rows = [(index, *values) for index, (_, values) in enumerate(records, 1)]
     by_type: dict[str, int] = {}
@@ -219,14 +237,33 @@ def read_archive(directory: Path) -> tuple[list[tuple], dict]:
             "end_time_utc": run["boundaries"]["end"]["time_utc"],
         } for run in sorted(manifest["runs"], key=lambda r: (r["shard"], r["branch"], r["start"]))],
         "notes": manifest.get("notes", []),
-        "row_counts": {"archive_records": len(rows), **by_type},
+        "row_counts": {"archive_records": len(rows), **by_type, "archive_methods": len(methods)},
         "manifest_sha256": sha256_file(manifest_path),
         "fixture": False,
     }
-    return rows, meta
+    return rows, methods, meta
 
 
-def fixture_archive() -> tuple[list[tuple], dict]:
+def read_methods(directory: Path, entry: dict | None) -> list[tuple]:
+    """Selector -> signature labels from method_names.csv, when the archive has them."""
+    if entry is None:
+        return []
+    path = directory / "method_names.csv"
+    if sha256_file(path) != entry["sha256"]:
+        raise ArchiveError("method_names.csv: SHA-256 differs from manifest.json")
+    methods = []
+    for row in read_rows(path):
+        selector = method_bytes(row["selector"])
+        if selector is None or len(selector) != 4 or not row["signature"]:
+            raise ArchiveError(f"method_names.csv: bad row {row}")
+        methods.append((selector, row["signature"], flag(row["verified"], "verified") == 1,
+                        int(row["candidates"]), row["source"]))
+    if len(methods) != entry["rows"]:
+        raise ArchiveError("method_names.csv: row count differs from manifest.json")
+    return methods
+
+
+def fixture_archive() -> tuple[list[tuple], list[tuple], dict]:
     """Deterministic synthetic archive on Hardhat development addresses."""
     alice = bytes.fromhex("f39fd6e51aad88f6f4ce6ab8827279cfffb92266")
     bob = bytes.fromhex("70997970c51812dc3a010c7d01b50e0d17dc79c8")
@@ -249,13 +286,17 @@ def fixture_archive() -> tuple[list[tuple], dict]:
         ("transaction", "transfer", 0, 0, True, 92730100, 0, None, h(6), h(106), alice, bob, 5000 * one, 21 * 10**14, 1, None, None, (None,) * 4),
         ("transaction", "transfer", 1, 1, False, 70075000, 0, None, h(7), h(107), bob, alice, 42 * one, 21 * 10**14, 1, None, None, (None,) * 4),
     ]
+    swap_input = bytes.fromhex("7ff36ab5" + "00" * 31 + "01" + "00" * 31 + "80")
     rows = []
     for index, spec in enumerate(specs, 1):
         (record_type, kind, shard, to_shard, rolled_back, block, tx_index, trace, tx_hash, eth_hash, frm, to,
          value, fee, status, method, ancestor, dest) = spec
+        input_data = swap_input if method else None
         rows.append((index, record_type, kind, shard, to_shard, rolled_back, block, h(10_000 + block),
                      base + dt.timedelta(minutes=index), tx_index, trace, tx_hash, eth_hash, frm, to, value, fee,
-                     status, method, ancestor, *dest))
+                     status, method, ancestor, *dest, input_data))
+    methods = [(bytes.fromhex("7ff36ab5"), "swapExactETHForTokens(uint256,address[],address,uint256)", True, 2,
+                "fixture")]
     by_type: dict[str, int] = {}
     for item in rows:
         by_type[item[1]] = by_type.get(item[1], 0) + 1
@@ -269,21 +310,23 @@ def fixture_archive() -> tuple[list[tuple], dict]:
              "start_time_utc": "2025-01-01T00:00:00Z", "end_time_utc": "2026-08-11T23:25:37Z"},
         ],
         "notes": ["Synthetic test data."],
-        "row_counts": {"archive_records": len(rows), **by_type},
+        "row_counts": {"archive_records": len(rows), **by_type, "archive_methods": len(methods)},
         "fixture": True,
     }
-    return rows, meta
+    return rows, methods, meta
 
 
-def load_into_db(rows: list[tuple], meta: dict, dsn: str, data_version: str, started: dt.datetime) -> dict:
+def load_into_db(rows: list[tuple], methods: list[tuple], meta: dict, dsn: str, data_version: str,
+                 started: dt.datetime) -> dict:
     import psycopg
 
     with psycopg.connect(dsn, autocommit=False) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT 1 FROM information_schema.tables "
-                        "WHERE table_schema='public' AND table_name='archive_records'")
+                        "WHERE table_schema='public' AND table_name='archive_methods'")
             if cur.fetchone() is None:
-                sys.exit("error: archive schema not applied; run db/migrations/009_tx_archive.sql")
+                sys.exit("error: archive schema not applied; run db/migrations/009_tx_archive.sql and "
+                         "010_tx_archive_calldata.sql")
             cur.execute(f"DROP SCHEMA IF EXISTS {STAGING} CASCADE")
             cur.execute(f"CREATE SCHEMA {STAGING}")
             for table in DATA_TABLES:
@@ -294,6 +337,9 @@ def load_into_db(rows: list[tuple], meta: dict, dsn: str, data_version: str, sta
             with cur.copy(f"COPY {STAGING}.archive_records ({', '.join(COLUMNS)}) FROM STDIN") as copy:
                 for row in rows:
                     copy.write_row(row)
+            with cur.copy(f"COPY {STAGING}.archive_methods ({', '.join(METHOD_COLUMNS)}) FROM STDIN") as copy:
+                for method in methods:
+                    copy.write_row(method)
             meta = {**meta, "data_version": data_version,
                     "loaded_at": dt.datetime.now(dt.timezone.utc).isoformat()}
             with cur.copy(f"COPY {STAGING}.archive_meta (key, value) FROM STDIN") as copy:
@@ -339,13 +385,14 @@ def main(argv: list[str] | None = None) -> int:
     started = dt.datetime.now(dt.timezone.utc)
     t0 = time.monotonic()
     if args.fixture:
-        rows, meta = fixture_archive()
+        rows, methods, meta = fixture_archive()
     else:
         try:
-            rows, meta = read_archive(Path(args.archive_dir).expanduser())
+            rows, methods, meta = read_archive(Path(args.archive_dir).expanduser())
         except ArchiveError as error:
             sys.exit(f"error: {error}")
-    counts = meta["row_counts"] if args.dry_run else load_into_db(rows, meta, args.dsn, args.data_version, started)
+    counts = meta["row_counts"] if args.dry_run else load_into_db(rows, methods, meta, args.dsn, args.data_version,
+                                                                  started)
     print(json.dumps({"mode": "dry-run" if args.dry_run else "loaded", "fixture": args.fixture,
                       "data_version": args.data_version, "row_counts": counts, "coverage": meta["coverage"],
                       "notes": meta["notes"], "elapsed_seconds": round(time.monotonic() - t0, 1)}, indent=2))
