@@ -6,15 +6,18 @@ import { wagmiConfig } from "./wagmi";
 import { App } from "./App";
 import { ConfirmPage } from "./ConfirmPage";
 import { HistoryPage } from "./history/HistoryPage";
-import { usePathname } from "./router";
+import { usePathname, useSearch } from "./router";
 import { VaultPage } from "./vault/VaultPage";
 import "./styles.css";
 
 function Root() {
   const path = usePathname();
+  const search = useSearch();
   if (path === "/confirm") return <ConfirmPage />;
   if (path === "/vault" || path.startsWith("/vault/")) return <VaultPage path={path} />;
-  if (path === "/history" || path.startsWith("/history/")) return <HistoryPage key={path} path={path} />;
+  if (path === "/history" || path.startsWith("/history/")) {
+    return <HistoryPage key={path + search} path={path} search={search} />;
+  }
   return <App />;
 }
 

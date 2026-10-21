@@ -6,10 +6,15 @@ import { formatUtc, one, shortAddress } from "../format";
 import { Nav } from "../Nav";
 import { navigate, onNavigate } from "../router";
 import {
+  calldataLines,
+  calldataSize,
+  callLabel,
   destinationText,
   direction,
   historyPath,
-  parseHistoryPath,
+  isCreation,
+  isMalformedHistoryLocation,
+  parseHistoryLocation,
   parseQuery,
   recordFlags,
   recordLabel,
@@ -105,11 +110,18 @@ function AddressHistory({ address }: { address: string }) {
             <tbody>
               {records.map((r) => {
                 const dir = direction(r, forms?.hex ?? address);
+                const fn = callLabel(r);
                 return (
                   <tr key={r.id} className={r.branch === "rolled_back" || r.status === "failed" ? "dim" : undefined}>
                     <td className="small">{formatUtc(r.time_utc)}</td>
                     <td>
-                      {recordLabel(r)} <Flags record={r} />
+                      {recordLabel(r)}
+                      {fn && (
+                        <code className="small fn-label" title={r.method_name ?? undefined}>
+                          {fn}
+                        </code>
+                      )}{" "}
+                      <Flags record={r} />
                     </td>
                     <td>
                       <span className={`dir dir-${dir}`}>{dir === "in" ? "In" : dir === "out" ? "Out" : "Self"}</span>
@@ -147,8 +159,48 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+function FunctionField({ record }: { record: ArchiveRecord }) {
+  if (!record.method || isCreation(record)) return null;
+  return (
+    <Field label="Function">
+      {record.method_name ? (
+        <>
+          <code>{record.method_name}</code>
+          {!record.method_verified && (
+            <span className="small muted"> (likely name; no verified contract uses this signature)</span>
+          )}
+        </>
+      ) : (
+        <span className="muted">Unknown</span>
+      )}
+      <br />
+      <span className="small muted">Selector</span> <code className="small">{record.method}</code>
+    </Field>
+  );
+}
+
+function Calldata({ input, creation }: { input: string; creation: boolean }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(input).then(
+      () => setCopied(true),
+      () => setCopied(false),
+    );
+  };
+  return (
+    <details className="calldata">
+      <summary>{calldataSize(input).toLocaleString("en-US")} bytes</summary>
+      <pre className="message">{creation ? input : calldataLines(input).join("\n")}</pre>
+      <button type="button" className="ghost" onClick={copy}>
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </details>
+  );
+}
+
 function RecordCard({ record }: { record: ArchiveRecord }) {
   const destination = destinationText(record);
+  const creation = isCreation(record);
   return (
     <div className={`history-record${record.branch === "rolled_back" ? " rolled-back" : ""}`}>
       <h3>
@@ -171,9 +223,10 @@ function RecordCard({ record }: { record: ArchiveRecord }) {
           </Field>
           {record.trace_address !== null && <Field label="Call path">{record.trace_address}</Field>}
           {record.fee_atto !== null && <Field label="Fee">{one(record.fee_atto, 8)} ONE</Field>}
-          {record.method && (
-            <Field label="Method">
-              <code>{record.method}</code>
+          <FunctionField record={record} />
+          {record.input && (
+            <Field label={creation ? "Contract code" : "Input data"}>
+              <Calldata input={record.input} creation={creation} />
             </Field>
           )}
           {destination && <Field label="Destination">{destination}</Field>}
@@ -247,11 +300,11 @@ function Coverage({ meta }: { meta: ArchiveMetaResponse }) {
   );
 }
 
-export function HistoryPage({ path }: { path: string }) {
-  const current: HistoryQuery | null = parseHistoryPath(path);
+export function HistoryPage({ path, search }: { path: string; search: string }) {
+  const current: HistoryQuery | null = parseHistoryLocation(path, search);
   const [input, setInput] = useState(current?.value ?? "");
   const [inputError, setInputError] = useState<string | null>(
-    path !== "/history" && !current ? "That is not a valid address or transaction hash." : null,
+    isMalformedHistoryLocation(path, search) ? "That is not a valid address or transaction hash." : null,
   );
   const meta = useQuery({ queryKey: ["archive-meta"], queryFn: fetchArchiveMeta, staleTime: 300_000 });
 

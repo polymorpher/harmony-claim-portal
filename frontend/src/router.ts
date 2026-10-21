@@ -23,6 +23,14 @@ export function usePathname(): string {
   );
 }
 
+export function useSearch(): string {
+  return useSyncExternalStore(
+    subscribe,
+    () => window.location.search,
+    () => "",
+  );
+}
+
 /** Client-side navigation, which keeps WalletConnect and Ledger sessions that a reload would drop. */
 export function navigate(path: string): void {
   window.history.pushState(null, "", path);
