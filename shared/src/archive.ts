@@ -44,7 +44,14 @@ export interface ArchiveRecord {
   fee_atto: string | null;
   /** Receipt status, or for internal transfers whether no enclosing call reverted. */
   status: "success" | "failed";
+  /** 4-byte selector (shorter only when the calldata is). */
   method: string | null;
+  /** Signature the selector most likely names, from a public signature database. */
+  method_name: string | null;
+  /** Whether a verified contract uses that signature; false marks a less certain label. */
+  method_verified: boolean | null;
+  /** Full calldata; present on transaction lookups only, null for records without calldata. */
+  input?: string | null;
   /** cross_shard only: the receipt was created inside a reverted call (credited before the epoch-2964 fix). */
   ancestor_reverted: boolean | null;
   destination: ArchiveDestination | null;
