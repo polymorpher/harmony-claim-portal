@@ -73,6 +73,19 @@ printf 'GCP_PROJECT=$(touch %s/pwned)\n' "$work" >"$work/evil.env"
 check bash -c '( source "'"$root"'/infra/lib.sh"; HCP_ENV_FILE="'"$work"'/evil.env" load_env ) >/dev/null 2>&1; [ $? -ne 0 ]'
 check test ! -e "$work/pwned"
 
+# Node floor: the generated VM script parses; bad floors die before any ssh
+check bash -c 'set -o pipefail; ( source "'"$root"'/infra/lib.sh"; NODE_MIN_VERSION=22.23.4 NODE_MAJOR=22 vm_node_floor_script ) | bash -n'
+check bash -c '( source "'"$root"'/infra/lib.sh"; NODE_MIN_VERSION="22.23.4; touch x" NODE_MAJOR=22 vm_node_floor_script ) >/dev/null 2>&1; [ $? -ne 0 ]'
+check bash -c '( source "'"$root"'/infra/lib.sh"; NODE_MIN_VERSION=24.22.1 NODE_MAJOR=22 vm_node_floor_script ) >/dev/null 2>&1; [ $? -ne 0 ]'
+sed 's/^NODE_MIN_VERSION=.*/NODE_MIN_VERSION=24.22.1/' "$work/.env" >"$work/node-major.env"
+: >"$GCLOUD_STUB_LOG"
+check bash -c '( HCP_ENV_FILE="'"$work"'/node-major.env" "'"$root"'/backend/deploy/upgrade-node.sh" ) >/dev/null 2>&1; [ $? -ne 0 ]'
+check test ! -s "$GCLOUD_STUB_LOG"
+# the remote script spans lines, so this log is not checked for argument shape
+check "$root/backend/deploy/upgrade-node.sh"
+check grep -q -- "--quiet compute ssh $VM_NAME --zone $GCP_ZONE --tunnel-through-iap --command set -euo pipefail" "$GCLOUD_STUB_LOG"
+check grep -q -- 'node_min="22.23.4"' "$GCLOUD_STUB_LOG"
+
 # --- integration: run the real scripts against the stub ------------------------------
 : >"$GCLOUD_STUB_LOG"
 check "$root/infra/gcp/10-create-vm.sh"
