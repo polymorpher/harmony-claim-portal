@@ -279,6 +279,13 @@ All scripts are idempotent bash over `gcloud`/`curl`; re-running is safe.
 
 Operations: `backend/deploy/logs.sh` tails the API journal; `backend/deploy/tunnel-db.sh` opens `localhost:5433 -> VM:5432`.
 
+Node security releases: bootstrap installs Node once and unattended upgrades
+cover Debian only, so Node on the VM changes only through the deploy scripts.
+Raise `NODE_MIN_VERSION` in `.env`, then run `backend/deploy/upgrade-node.sh`.
+It upgrades the NodeSource package, restarts the units still running the old
+binary, and health-checks without shipping a release. `deploy-backend.sh`
+applies the same floor before it installs a release.
+
 ## Data source and embargo
 
 Claim amounts and routing come from the
