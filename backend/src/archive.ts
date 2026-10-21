@@ -44,6 +44,10 @@ export interface ArchiveRow {
   fee_atto: string | null;
   status: number;
   method: string | null;
+  method_name: string | null;
+  method_verified: boolean | null;
+  /** Only the hash lookup selects calldata. */
+  input?: string | null;
   ancestor_reverted: boolean | null;
   dest_status: string | null;
   dest_block_number: string | number | null;
@@ -62,13 +66,15 @@ export interface ArchiveRepository {
 }
 
 const COLUMNS = `
-  id::text, record_type, kind, shard, to_shard, rolled_back, block_number::text,
-  '0x' || encode(block_hash, 'hex') AS block_hash, block_time, tx_index, trace_address,
-  '0x' || encode(tx_hash, 'hex') AS tx_hash, '0x' || encode(eth_hash, 'hex') AS eth_hash,
-  '0x' || encode(from_addr, 'hex') AS from_addr, '0x' || encode(to_addr, 'hex') AS to_addr,
-  value_atto::text, fee_atto::text, status, '0x' || encode(method, 'hex') AS method,
-  ancestor_reverted, dest_status, dest_block_number::text,
-  '0x' || encode(dest_block_hash, 'hex') AS dest_block_hash, dest_time`;
+  r.id::text, r.record_type, r.kind, r.shard, r.to_shard, r.rolled_back, r.block_number::text,
+  '0x' || encode(r.block_hash, 'hex') AS block_hash, r.block_time, r.tx_index, r.trace_address,
+  '0x' || encode(r.tx_hash, 'hex') AS tx_hash, '0x' || encode(r.eth_hash, 'hex') AS eth_hash,
+  '0x' || encode(r.from_addr, 'hex') AS from_addr, '0x' || encode(r.to_addr, 'hex') AS to_addr,
+  r.value_atto::text, r.fee_atto::text, r.status, '0x' || encode(r.method, 'hex') AS method,
+  m.signature AS method_name, m.verified AS method_verified,
+  r.ancestor_reverted, r.dest_status, r.dest_block_number::text,
+  '0x' || encode(r.dest_block_hash, 'hex') AS dest_block_hash, r.dest_time`;
+const METHODS_JOIN = "LEFT JOIN archive_methods m ON m.selector = r.method";
 
 const MAX_ID = "9223372036854775807";
 
@@ -105,7 +111,8 @@ export class PgArchiveQueries implements ArchiveRepository {
            WHERE to_addr = decode($1, 'hex') AND from_addr <> decode($1, 'hex') AND id < $2
            ORDER BY id DESC LIMIT $3)
        ) r
-       ORDER BY id DESC
+       ${METHODS_JOIN}
+       ORDER BY r.id DESC
        LIMIT $3`,
       [addressLower.slice(2), before === null ? MAX_ID : before.toString(), limit],
     );
@@ -114,9 +121,10 @@ export class PgArchiveQueries implements ArchiveRepository {
 
   async getArchiveByHash(hashLower: string, limit: number): Promise<ArchiveRow[]> {
     const res = await this.pool.query<ArchiveRow>(
-      `SELECT ${COLUMNS} FROM archive_records
-        WHERE tx_hash = decode($1, 'hex') OR eth_hash = decode($1, 'hex')
-        ORDER BY id
+      `SELECT ${COLUMNS}, '0x' || encode(r.input, 'hex') AS input
+         FROM archive_records r ${METHODS_JOIN}
+        WHERE r.tx_hash = decode($1, 'hex') OR r.eth_hash = decode($1, 'hex')
+        ORDER BY r.id
         LIMIT $2`,
       [hashLower.slice(2), limit],
     );
@@ -156,6 +164,9 @@ export function toArchiveRecord(row: ArchiveRow): ArchiveRecord {
     fee_atto: row.fee_atto,
     status: row.status === 1 ? "success" : "failed",
     method: row.method,
+    method_name: row.method_name,
+    method_verified: row.method_verified,
+    ...(row.input !== undefined ? { input: row.input } : {}),
     ancestor_reverted: row.ancestor_reverted,
     destination:
       row.record_type === "cross_shard" && row.dest_status !== null

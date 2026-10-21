@@ -13,6 +13,7 @@ const LEDGER_TABLES = [
   "schema_migrations",
   "archive_meta",
   "archive_records",
+  "archive_methods",
 ] as const;
 
 export interface PrivilegeProbe {
