@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Build the API locally, ship it to the VM over IAP, apply pending SQL
-# migrations, seed reason texts, restart the systemd unit and health-check.
+# Build the API locally, ship it to the VM over IAP, raise Node to
+# NODE_MIN_VERSION, apply pending SQL migrations, seed reason texts, restart
+# the systemd unit and health-check.
 #
 #   backend/deploy/deploy-backend.sh
 #
@@ -20,6 +21,7 @@ if [ -n "${CONFIRM_BACKUP_BUCKET:-}" ]; then
   esac
 fi
 require_tools gcloud pnpm tar
+node_floor="$(vm_node_floor_script)"
 
 cd "$REPO_ROOT"
 
@@ -57,6 +59,8 @@ env_file="$APP_ENV_FILE"
 app_user="$APP_USER"
 service="$SERVICE_NAME"
 port="$API_PORT"
+
+$node_floor
 
 sudo mkdir -p "\$app_dir/releases/\$release"
 sudo tar -C "\$app_dir/releases/\$release" -xzf "/tmp/harmony-claim-api-\$release.tgz"
