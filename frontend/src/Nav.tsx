@@ -2,6 +2,7 @@ const PAGES = [
   { href: "/", label: "Claim lookup" },
   { href: "/confirm", label: "Confirm activity" },
   { href: "/vault", label: "Governor Vaults" },
+  { href: "/history", label: "Transaction history" },
 ] as const;
 
 export function Nav({ current }: { current: (typeof PAGES)[number]["href"] }) {

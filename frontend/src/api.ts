@@ -1,5 +1,8 @@
 import type {
   ApiError,
+  ArchiveAddressResponse,
+  ArchiveMetaResponse,
+  ArchiveTxResponse,
   ClaimResponse,
   ConfirmationChallenge,
   ConfirmationReceipt,
@@ -49,6 +52,13 @@ function postJson<T>(path: string, body: unknown): Promise<T> {
 export const fetchMeta = () => request<MetaResponse>("/v1/meta");
 export const fetchClaim = (address: string) =>
   request<ClaimResponse>(`/v1/claims/${encodeURIComponent(address.trim())}`);
+export const fetchArchiveMeta = () => request<ArchiveMetaResponse>("/v1/archive/meta");
+export const fetchArchiveAddress = (address: string, before: string | null) =>
+  request<ArchiveAddressResponse>(
+    `/v1/archive/address/${encodeURIComponent(address.trim())}${before ? `?before=${encodeURIComponent(before)}` : ""}`,
+  );
+export const fetchArchiveTx = (hash: string) =>
+  request<ArchiveTxResponse>(`/v1/archive/tx/${encodeURIComponent(hash.trim())}`);
 export const fetchConfirmation = (address: string) =>
   request<ConfirmationStatus>(`/v1/confirmations/${encodeURIComponent(address.trim())}`);
 export const createConfirmationChallenge = (address: string) =>
