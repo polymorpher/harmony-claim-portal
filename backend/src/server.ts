@@ -6,7 +6,7 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const repo = new PgRepository(config.databaseUrl);
   if (config.enforceDbPrivileges) await repo.checkPrivileges();
-  const app = await buildApp({ config, repo });
+  const app = await buildApp({ config, repo, archive: repo.archive });
 
   const shutdown = async (signal: string) => {
     app.log.info({ signal }, "shutting down");

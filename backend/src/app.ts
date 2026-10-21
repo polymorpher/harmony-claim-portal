@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { normalizeAddress } from "./address.js";
+import { registerArchiveRoutes, type ArchiveRepository } from "./archive.js";
 import { buildClaimResponse, buildMeta } from "./claims.js";
 import type { Config } from "./config.js";
 import { clientKey, registerApiSafety, registerNotFound } from "./http.js";
@@ -10,6 +11,8 @@ export { clientKey };
 export interface AppOptions {
   config: Pick<Config, "rateLimitMax" | "rateLimitWindow" | "exposeContractAmounts" | "logLevel" | "trustProxy">;
   repo: ClaimRepository;
+  /** Transaction archive (/api/v1/archive/*); its routes are absent without it. */
+  archive?: ArchiveRepository;
 }
 
 export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
@@ -58,6 +61,8 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       { exposeContractAmounts: config.exposeContractAmounts },
     );
   });
+
+  if (opts.archive) registerArchiveRoutes(app, opts.archive);
 
   registerNotFound(app);
 

@@ -4,6 +4,7 @@
  * implementation; tests provide an in-memory one.
  */
 import pg from "pg";
+import { PgArchiveQueries } from "./archive.js";
 import { assertPrivileges } from "./privileges.js";
 
 export interface AccountRow {
@@ -133,6 +134,8 @@ export class PgRepository implements ClaimRepository {
   private pool: pg.Pool;
   private reasonCache: { at: number; value: Record<string, ReasonText> } | null = null;
   private metaCache: { at: number; value: SnapshotMeta } | null = null;
+  /** Transaction-archive queries on the same pool and role. */
+  readonly archive: PgArchiveQueries;
 
   constructor(databaseUrl: string) {
     this.pool = new pg.Pool({
@@ -142,6 +145,7 @@ export class PgRepository implements ClaimRepository {
       connectionTimeoutMillis: 5_000,
       statement_timeout: 5_000,
     });
+    this.archive = new PgArchiveQueries(this.pool);
   }
 
   async ping(): Promise<void> {

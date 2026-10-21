@@ -11,6 +11,8 @@ const LEDGER_TABLES = [
   "reason_texts",
   "load_runs",
   "schema_migrations",
+  "archive_meta",
+  "archive_records",
 ] as const;
 
 export interface PrivilegeProbe {
