@@ -32,6 +32,8 @@ function row(id: number, partial: Partial<ArchiveRow>): ArchiveRow {
     fee_atto: "2100000000000000",
     status: 1,
     method: null,
+    method_name: null,
+    method_verified: null,
     ancestor_reverted: null,
     dest_status: null,
     dest_block_number: null,
@@ -44,7 +46,7 @@ function row(id: number, partial: Partial<ArchiveRow>): ArchiveRow {
 const ROWS: ArchiveRow[] = [
   row(1, {}),
   row(2, { from_addr: BOB, to_addr: ALICE, value_atto: "2000000000000000000" }),
-  row(3, { kind: "call", to_addr: POOL, method: "0xd0e30db0", status: 0 }),
+  row(3, { kind: "call", to_addr: POOL, method: "0xd0e30db0", method_name: "deposit()", method_verified: true, status: 0 }),
   row(4, {
     record_type: "internal", kind: "call", tx_hash: H(3), eth_hash: ETH(3), trace_address: "0.1",
     from_addr: POOL, to_addr: ALICE, fee_atto: null, status: 0,
@@ -79,7 +81,8 @@ class MemoryArchive implements ArchiveRepository {
       .slice(0, limit);
   }
   async getArchiveByHash(hash: string, limit: number) {
-    return ROWS.filter((r) => r.tx_hash === hash || r.eth_hash === hash).slice(0, limit);
+    return ROWS.filter((r) => r.tx_hash === hash || r.eth_hash === hash).slice(0, limit)
+      .map((r) => ({ ...r, input: r.method ? `${r.method}00` : null }));
   }
 }
 
@@ -143,7 +146,8 @@ describe("archive by address", () => {
     const byId = Object.fromEntries(body.records.map((r: { id: string }) => [r.id, r]));
     expect(byId["1"]).toMatchObject({ record_type: "transaction", branch: "canonical", value_one: "1.5", status: "success",
                                      block_number: 67500001, time_utc: "2025-01-01T00:00:01.000Z", destination: null });
-    expect(byId["3"]).toMatchObject({ status: "failed", method: "0xd0e30db0" });
+    expect(byId["3"]).toMatchObject({ status: "failed", method: "0xd0e30db0", method_name: "deposit()", method_verified: true });
+    expect(byId["3"]).not.toHaveProperty("input");
     expect(byId["4"]).toMatchObject({ record_type: "internal", trace_address: "0.1", tx_hash: H(3) });
     expect(byId["6"]).toMatchObject({ record_type: "cross_shard", to_shard: 1, ancestor_reverted: true,
                                      destination: { status: "credited", block_number: 95000000 } });
@@ -172,6 +176,12 @@ describe("archive by hash", () => {
       expect(res.statusCode).toBe(200);
       expect(res.json().records.map((r: { record_type: string }) => r.record_type)).toEqual(["transaction", "internal"]);
     }
+  });
+
+  it("includes calldata and the function name", async () => {
+    const [call, internal] = (await get(`/api/v1/archive/tx/${H(3)}`)).json().records;
+    expect(call).toMatchObject({ method: "0xd0e30db0", method_name: "deposit()", method_verified: true, input: "0xd0e30db000" });
+    expect(internal).toMatchObject({ method: null, method_name: null, input: null });
   });
 
   it("returns both branches when a hash was rolled back and included again", async () => {

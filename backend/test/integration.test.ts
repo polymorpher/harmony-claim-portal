@@ -177,6 +177,8 @@ suite("transaction archive against fixture database", () => {
       method: "GET", url: `/api/v1/archive/address/${ADDR.eoa}?limit=10&before=${first.next_before}`,
     })).json();
     expect(rest.records.map((r: { id: string }) => r.id)).toEqual(["5", "4", "3", "2", "1"]);
+    expect(rest.records[3]).toMatchObject({ method: "0x7ff36ab5", method_name: expect.stringMatching(/^swapExact/) });
+    expect(rest.records[3]).not.toHaveProperty("input");
     expect(rest.next_before).toBeNull();
   });
 
@@ -184,8 +186,12 @@ suite("transaction archive against fixture database", () => {
     for (const hash of [H(2), H(102)]) {
       const body = (await app.inject({ method: "GET", url: `/api/v1/archive/tx/${hash}` })).json();
       expect(body.records.map((r: { record_type: string }) => r.record_type)).toEqual(["transaction", "internal"]);
-      expect(body.records[0]).toMatchObject({ method: "0x7ff36ab5", eth_hash: H(102), fee_atto: "9000000000000000" });
-      expect(body.records[1]).toMatchObject({ trace_address: "0", value_one: "12" });
+      expect(body.records[0]).toMatchObject({
+        method: "0x7ff36ab5", eth_hash: H(102), fee_atto: "9000000000000000",
+        method_name: "swapExactETHForTokens(uint256,address[],address,uint256)", method_verified: true,
+        input: `0x7ff36ab5${"00".repeat(31)}01${"00".repeat(31)}80`,
+      });
+      expect(body.records[1]).toMatchObject({ trace_address: "0", value_one: "12", method_name: null, input: null });
     }
     expect((await app.inject({ method: "GET", url: `/api/v1/archive/tx/${H(999)}` })).statusCode).toBe(404);
   });
