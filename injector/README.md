@@ -129,7 +129,8 @@ the stage policy and the vault-share routing exceptions, and stops unless:
 `inject_archive.py` loads the transaction archive for `/history` from the
 output directory of harmony-migration's `make tx-archive`
 (`docs/tx-archive.md` there): `transactions.csv`, `internal_transfers.csv`,
-`cross_shard.csv`, `staking.csv` and `manifest.json`.
+`cross_shard.csv`, `staking.csv`, `manifest.json`, and `method_names.csv` when
+the manifest lists it.
 
 ```sh
 python3 inject_archive.py --archive-dir <archive dir> --dry-run
@@ -143,6 +144,7 @@ Checks before anything is written:
 - every file's SHA-256 and row count equal `manifest.json`;
 - every hash is 32 bytes, every address 20 bytes, every method selector
   1–4 bytes (shorter only when the calldata itself is shorter);
+- a transaction with a selector has calldata, and the calldata begins with it;
 - every amount is at least the archive's `min_value_atto`;
 - kinds, branches, statuses and cross-shard destination statuses are known values.
 
@@ -150,12 +152,15 @@ Records from all four files are merged into `archive_records` in
 chronological order (time, shard, block, transaction index, record type, call
 path), so `id` 1 is the oldest record and the API pages on `id`. A cross-shard
 receipt takes the Ethereum-style hash of its source transaction when that
-transaction is archived. The load fills an `archive_staging` schema, swaps
-`archive_meta` and `archive_records` into `public` in one transaction, then
+transaction is archived. Transactions keep their full calldata in `input`;
+`method_names.csv` (selector to signature, from public signature databases)
+goes into `archive_methods`, which the API joins for a function label. The
+load fills an `archive_staging` schema, swaps `archive_meta`,
+`archive_records` and `archive_methods` into `public` in one transaction, then
 vacuums and analyzes them. It never touches the claim tables, and
 `inject_claims.py` never touches these. It needs
-`db/migrations/009_tx_archive.sql` and holds all records in memory (about
-1 GB for 1.1 million records).
+`db/migrations/009_tx_archive.sql` and `010_tx_archive_calldata.sql`, and holds
+all records in memory (about 1.6 GB for 1.1 million records with calldata).
 
 The archive is chain data, not claim results, so the embargo below does not
 apply to it.

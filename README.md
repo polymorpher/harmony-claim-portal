@@ -20,6 +20,7 @@ db/migrations/001_schema.sql   schema (amounts NUMERIC(78,0) in atto-ONE)
 db/migrations/005_confirm_schema.sql   confirmation candidates and append-only signatures
 db/migrations/006_confirm_signature_scheme.sql   records how each confirmation was signed
 db/migrations/009_tx_archive.sql   transaction archive for /history (archive_meta, archive_records)
+db/migrations/010_tx_archive_calldata.sql   calldata and function names for the archive (archive_methods)
 db/ops/                        role split, candidate load, confirmed-wallets report, export, review, backup (see db/ops/README.md)
 db/seed/reason_texts.json      reason_code -> user-facing title/text (+ apply-reason-texts.sh)
 injector/                      Python loaders: harmony-migration CSVs -> Postgres (COPY + atomic swap) for claims and the transaction archive; vault catalog builder
@@ -111,9 +112,11 @@ contracts, cross-shard receipts (including those created inside reverted
 calls before the epoch-2964 fix), and staking amounts, on shards 0 and 1, plus
 the blocks that the August 2026 rollback abandoned, labeled as never final.
 
-Enter an address (`0x…` or `one1…`) or a transaction hash. `/history/address/<address>`
-lists the address's records newest first; `/history/tx/<hash>` shows one
-transaction. The footer shows the archive's block coverage and its notes (for
+Enter an address (`0x…` or `one1…`) or a transaction hash. `/history?address=<address>`
+lists the address's records newest first; `/history?tx=<hash>` shows one
+transaction. Links use the query string so that every link loads the real
+`/history` object from the bucket. The older `/history/address/…` and
+`/history/tx/…` forms still render. The footer shows the archive's block coverage and its notes (for
 example, a range known to hold no transactions).
 
 The archive is built by harmony-migration (`docs/tx-archive.md`, `make
@@ -269,7 +272,7 @@ All scripts are idempotent bash over `gcloud`/`curl`; re-running is safe.
      tunnel open, `python3 injector/inject_archive.py --archive-dir <harmony-migration tx-archive output>
      --dsn "$(backend/deploy/tunnel-db.sh --print-dsn)" --data-version <archive date>`.
      Run `--dry-run` first; it verifies every file against `manifest.json`.
-     Needs `db/migrations/009_tx_archive.sql`, which `deploy-backend.sh` applies.
+     Needs `db/migrations/009_tx_archive.sql` and `010_tx_archive_calldata.sql`, which `deploy-backend.sh` applies.
    - After a data load that changes the exchange inventory, reload the
      confirmation candidates (`db/ops/load-candidates.sh`, see
      `db/ops/README.md`) so newly listed exchange wallets cannot sign.
