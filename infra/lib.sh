@@ -141,6 +141,7 @@ set_defaults() {
   : "${API_PORT:=8080}"
   : "${PG_MAJOR:=18}"
   : "${NODE_MAJOR:=22}"
+  : "${NODE_MIN_VERSION:=22.23.4}"
   : "${DB_NAME:=claims}"
   : "${DB_USER:=claimapi}"
   : "${DB_TUNNEL_PORT:=5433}"
@@ -167,7 +168,7 @@ set_defaults() {
   : "${APP_USER:=claimapi}"
   : "${SERVICE_NAME:=harmony-claim-api}"
   export GCP_REGION GCP_ZONE VM_NAME VM_MACHINE_TYPE VM_DISK_GB VM_IMAGE_FAMILY VM_IMAGE_PROJECT \
-    VM_NETWORK VM_NETWORK_TAG API_PORT PG_MAJOR NODE_MAJOR DB_NAME DB_USER DB_TUNNEL_PORT LB_NAME EXTRA_DOMAINS \
+    VM_NETWORK VM_NETWORK_TAG API_PORT PG_MAJOR NODE_MAJOR NODE_MIN_VERSION DB_NAME DB_USER DB_TUNNEL_PORT LB_NAME EXTRA_DOMAINS \
     VM_STATIC_IP_NAME LB_IP_NAME INSTANCE_GROUP HEALTH_CHECK BACKEND_SERVICE BACKEND_BUCKET URL_MAP \
     REDIRECT_URL_MAP LB_HTTPS_PROXY_NAME LB_HTTP_PROXY_NAME HTTPS_RULE HTTP_RULE CERT_NAME CERT_MAP APP_DIR APP_ENV_FILE \
     APP_USER SERVICE_NAME
@@ -193,4 +194,27 @@ vm_ssh() {
 # Copy files to the VM through IAP.  vm_scp <local...> <remote-path>
 vm_scp() {
   gc compute scp --zone "$GCP_ZONE" --tunnel-through-iap "$@"
+}
+
+# Print bash for the VM that upgrades the NodeSource nodejs package when
+# /usr/bin/node is older than NODE_MIN_VERSION and fails if it still is.
+# Running services keep the old binary until they restart.
+vm_node_floor_script() {
+  [[ "$NODE_MIN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "NODE_MIN_VERSION must look like 22.23.4 (got: $NODE_MIN_VERSION)"
+  [ "${NODE_MIN_VERSION%%.*}" = "$NODE_MAJOR" ] || die "NODE_MIN_VERSION $NODE_MIN_VERSION is not on NODE_MAJOR $NODE_MAJOR"
+  cat <<EOF
+node_min="$NODE_MIN_VERSION"
+node_have="\$(/usr/bin/node -p process.versions.node 2>/dev/null || echo 0)"
+if dpkg --compare-versions "\$node_have" lt "\$node_min"; then
+  echo "node \$node_have is older than \$node_min; upgrading nodejs"
+  sudo apt-get -o DPkg::Lock::Timeout=120 update -qq
+  sudo env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=120 install -y -qq --only-upgrade nodejs
+  node_have="\$(/usr/bin/node -p process.versions.node)"
+fi
+if dpkg --compare-versions "\$node_have" lt "\$node_min"; then
+  echo "node \$node_have is still older than NODE_MIN_VERSION=\$node_min; the NodeSource repository has nothing newer yet" >&2
+  exit 1
+fi
+echo "node \$node_have (floor \$node_min)"
+EOF
 }
