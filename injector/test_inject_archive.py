@@ -24,7 +24,7 @@ def h(n):
 
 HEADERS = {
     "transactions.csv": ["shard", "branch", "kind", "block_number", "block_hash", "timestamp", "tx_index", "tx_hash",
-                         "eth_hash", "from", "to", "value_atto", "fee_atto", "status", "to_shard", "method"],
+                         "eth_hash", "from", "to", "value_atto", "fee_atto", "status", "to_shard", "method", "input"],
     "internal_transfers.csv": ["shard", "branch", "block_number", "block_hash", "timestamp", "tx_index", "tx_hash",
                                "eth_hash", "trace_address", "type", "from", "to", "value_atto", "effective"],
     "cross_shard.csv": ["branch", "from_shard", "to_shard", "mechanism", "block_number", "block_hash", "timestamp",
@@ -38,10 +38,14 @@ HEADERS = {
 def tx(n, block, ts, value=2 * ONE, kind="transfer", shard=0, branch="canonical", to_shard=0, status=1):
     return {"shard": shard, "branch": branch, "kind": kind, "block_number": block, "block_hash": h(9000 + block),
             "timestamp": ts, "tx_index": 0, "tx_hash": h(n), "eth_hash": h(500 + n), "from": ALICE, "to": BOB,
-            "value_atto": value, "fee_atto": 21000 * 10**11, "status": status, "to_shard": to_shard, "method": ""}
+            "value_atto": value, "fee_atto": 21000 * 10**11, "status": status, "to_shard": to_shard, "method": "",
+            "input": ""}
 
 
-def write_archive(root, tables, tamper=None, minimum=ONE):
+METHODS = [{"selector": "0xd0e30db0", "signature": "deposit()", "verified": 1, "candidates": 2, "source": "test"}]
+
+
+def write_archive(root, tables, tamper=None, minimum=ONE, methods=None):
     files = {}
     for name, fields in HEADERS.items():
         path = root / name
@@ -51,6 +55,13 @@ def write_archive(root, tables, tamper=None, minimum=ONE):
             writer.writerows(tables.get(name, []))
         files[name] = {"rows": len(tables.get(name, [])),
                        "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    if methods is not None:
+        path = root / "method_names.csv"
+        with open(path, "w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(METHODS[0]), lineterminator="\n")
+            writer.writeheader()
+            writer.writerows(methods)
+        files["method_names.csv"] = {"rows": len(methods), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
     if tamper:
         with open(root / tamper, "a") as handle:
             handle.write("\n")
@@ -84,7 +95,7 @@ class ReadArchiveTest(unittest.TestCase):
     def test_orders_records_and_assigns_ids(self):
         with tempfile.TemporaryDirectory() as tmp:
             write_archive(Path(tmp), self.tables())
-            rows, meta = ia.read_archive(Path(tmp))
+            rows, methods, meta = ia.read_archive(Path(tmp))
         columns = {name: index for index, name in enumerate(ia.COLUMNS)}
         summary = [(r[columns["id"]], r[columns["record_type"]], r[columns["block_number"]], r[columns["trace_address"]])
                    for r in rows]
@@ -98,7 +109,7 @@ class ReadArchiveTest(unittest.TestCase):
         self.assertIs(rows[6][columns["rolled_back"]], True)
         self.assertIsNone(rows[7][columns["to_addr"]])
         self.assertEqual(meta["row_counts"], {"archive_records": 8, "transaction": 4, "cross_shard": 1,
-                                              "internal": 2, "staking": 1})
+                                              "internal": 2, "staking": 1, "archive_methods": 0})
         self.assertEqual(meta["coverage"][0]["end_block"], 200)
         self.assertEqual(len(rows[0]), len(ia.COLUMNS))
 
@@ -123,6 +134,33 @@ class ReadArchiveTest(unittest.TestCase):
                 ia.read_archive(Path(tmp))
 
 
+class CalldataTest(unittest.TestCase):
+    def call(self, method="0xd0e30db0", data="0xd0e30db0"):
+        return {**tx(9, 150, 1735689750, kind="call"), "method": method, "input": data}
+
+    def test_loads_calldata_and_method_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_archive(Path(tmp), {"transactions.csv": [self.call(), tx(8, 140, 1735689740)]}, methods=METHODS)
+            rows, methods, meta = ia.read_archive(Path(tmp))
+        index = ia.COLUMNS.index("input")
+        self.assertEqual([r[index] for r in rows], [None, bytes.fromhex("d0e30db0")])
+        self.assertEqual(methods, [(bytes.fromhex("d0e30db0"), "deposit()", True, 2, "test")])
+        self.assertEqual(meta["row_counts"]["archive_methods"], 1)
+
+    def test_rejects_missing_or_mismatched_calldata(self):
+        for row in (self.call(data=""), self.call(data="0xa9059cbb00")):
+            with tempfile.TemporaryDirectory() as tmp:
+                write_archive(Path(tmp), {"transactions.csv": [row]})
+                with self.assertRaisesRegex(ia.ArchiveError, "calldata"):
+                    ia.read_archive(Path(tmp))
+
+    def test_rejects_tampered_method_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_archive(Path(tmp), {"transactions.csv": [self.call()]}, methods=METHODS, tamper="method_names.csv")
+            with self.assertRaisesRegex(ia.ArchiveError, "method_names.csv"):
+                ia.read_archive(Path(tmp))
+
+
 class MethodTest(unittest.TestCase):
     def test_accepts_short_calldata_selectors(self):
         self.assertEqual(ia.method_bytes("0xa9059cbb"), bytes.fromhex("a9059cbb"))
@@ -135,11 +173,11 @@ class MethodTest(unittest.TestCase):
 
 class FixtureTest(unittest.TestCase):
     def test_fixture_rows_match_columns(self):
-        rows, meta = ia.fixture_archive()
+        rows, methods, meta = ia.fixture_archive()
         self.assertEqual({len(r) for r in rows}, {len(ia.COLUMNS)})
         self.assertEqual([r[0] for r in rows], list(range(1, len(rows) + 1)))
         self.assertTrue(meta["fixture"])
-        self.assertEqual(sum(v for k, v in meta["row_counts"].items() if k != "archive_records"), len(rows))
+        self.assertEqual(sum(v for k, v in meta["row_counts"].items() if k not in ("archive_records", "archive_methods")), len(rows))
 
 
 if __name__ == "__main__":
