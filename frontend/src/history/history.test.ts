@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { hexToBech32, type ArchiveRecord } from "@hcp/shared";
 import {
+  calldataLines,
+  calldataSize,
+  callLabel,
   destinationText,
   direction,
+  functionName,
   historyPath,
-  parseHistoryPath,
+  isMalformedHistoryLocation,
+  parseHistoryLocation,
   parseQuery,
   recordFlags,
   recordLabel,
@@ -37,6 +42,8 @@ function record(partial: Partial<ArchiveRecord>): ArchiveRecord {
     fee_atto: null,
     status: "success",
     method: null,
+    method_name: null,
+    method_verified: null,
     ancestor_reverted: null,
     destination: null,
     ...partial,
@@ -53,14 +60,29 @@ describe("history query", () => {
     expect(parseQuery("hello")).toBeNull();
   });
 
-  it("round-trips through the URL", () => {
+  it("round-trips through a query-string link", () => {
     for (const q of [parseQuery(ALICE)!, parseQuery(HASH)!, parseQuery(hexToBech32(BOB))!]) {
-      expect(parseHistoryPath(historyPath(q))).toEqual(q);
+      const url = new URL(historyPath(q), "https://migrate.country");
+      expect(url.pathname).toBe("/history");
+      expect(parseHistoryLocation(url.pathname, url.search)).toEqual(q);
     }
-    expect(parseHistoryPath("/history")).toBeNull();
-    expect(parseHistoryPath(`/history/tx/${ALICE}`)).toBeNull();
-    expect(parseHistoryPath(`/history/address/${HASH}`)).toBeNull();
-    expect(parseHistoryPath("/history/address/%E0%A4%A")).toBeNull();
+    expect(parseHistoryLocation("/history", "")).toBeNull();
+    expect(parseHistoryLocation("/history", `?tx=${ALICE}`)).toBeNull();
+    expect(parseHistoryLocation("/history", `?address=${HASH}`)).toBeNull();
+  });
+
+  it("still reads the older path links", () => {
+    expect(parseHistoryLocation(`/history/address/${ALICE}`, "")).toEqual({ type: "address", value: ALICE });
+    expect(parseHistoryLocation(`/history/tx/${HASH}`, "")).toEqual({ type: "tx", value: HASH });
+    expect(parseHistoryLocation(`/history/tx/${ALICE}`, "")).toBeNull();
+    expect(parseHistoryLocation("/history/address/%E0%A4%A", "")).toBeNull();
+  });
+
+  it("flags only locations that name an unparseable record", () => {
+    expect(isMalformedHistoryLocation("/history", "")).toBe(false);
+    expect(isMalformedHistoryLocation("/history", `?address=${ALICE}`)).toBe(false);
+    expect(isMalformedHistoryLocation("/history", "?address=nope")).toBe(true);
+    expect(isMalformedHistoryLocation("/history/tx/nope", "")).toBe(true);
   });
 });
 
@@ -103,5 +125,21 @@ describe("record display", () => {
     });
     expect(destinationText(credited)).toBe("Credited on shard 1 in block 95,000,000");
     expect(destinationText(record({}))).toBeNull();
+  });
+
+  it("names called functions but not creation code", () => {
+    expect(functionName("update(string,string,uint8,string,string[],bool)")).toBe("update");
+    expect(functionName("fallback")).toBe("fallback");
+    const call = { record_type: "transaction" as const, kind: "call", method_name: "deposit()" };
+    expect(callLabel(call)).toBe("deposit");
+    expect(callLabel({ ...call, method_name: null })).toBeNull();
+    expect(callLabel({ ...call, kind: "create" })).toBeNull();
+  });
+
+  it("splits calldata into selector and argument words", () => {
+    const input = `0xd0e30db0${"00".repeat(31)}01${"ff".repeat(3)}`;
+    expect(calldataSize(input)).toBe(39);
+    expect(calldataLines(input)).toEqual(["0xd0e30db0", `${"00".repeat(31)}01`, "ffffff"]);
+    expect(calldataLines("0x31")).toEqual(["0x31"]);
   });
 });
