@@ -32,6 +32,14 @@ export interface PrivilegeProbe {
   confirmations_delete: boolean;
   candidates_insert: boolean;
   reviews_insert: boolean;
+  vault_schema_usage: boolean;
+  vault_metadata_select: boolean;
+  vault_metadata_insert: boolean;
+  vault_metadata_update: boolean;
+  vault_metadata_delete: boolean;
+  vault_changes_insert: boolean;
+  vault_changes_update: boolean;
+  vault_changes_delete: boolean;
 }
 
 // Resolve every object by OID. has_*_privilege(name) looks the name up through
@@ -108,7 +116,54 @@ SELECT
       FROM pg_class c
       JOIN pg_namespace n ON n.oid = c.relnamespace
      WHERE n.nspname = 'confirm' AND c.relname = 'reviews' AND c.relkind = 'r'
-  ), false) AS reviews_insert
+  ), false) AS reviews_insert,
+  COALESCE((
+    SELECT has_schema_privilege(current_user, n.oid, 'USAGE')
+      FROM pg_namespace n
+     WHERE n.nspname = 'vault'
+  ), false) AS vault_schema_usage,
+  COALESCE((
+    SELECT has_table_privilege(current_user, c.oid, 'SELECT')
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'vault' AND c.relname = 'metadata' AND c.relkind = 'r'
+  ), false) AS vault_metadata_select,
+  COALESCE((
+    SELECT has_table_privilege(current_user, c.oid, 'INSERT')
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'vault' AND c.relname = 'metadata' AND c.relkind = 'r'
+  ), false) AS vault_metadata_insert,
+  COALESCE((
+    SELECT has_table_privilege(current_user, c.oid, 'UPDATE')
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'vault' AND c.relname = 'metadata' AND c.relkind = 'r'
+  ), false) AS vault_metadata_update,
+  COALESCE((
+    SELECT has_table_privilege(current_user, c.oid, 'DELETE')
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'vault' AND c.relname = 'metadata' AND c.relkind = 'r'
+  ), false) AS vault_metadata_delete,
+  COALESCE((
+    SELECT has_table_privilege(current_user, c.oid, 'INSERT')
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'vault' AND c.relname = 'metadata_changes' AND c.relkind = 'r'
+  ), false) AS vault_changes_insert,
+  COALESCE((
+    SELECT has_table_privilege(current_user, c.oid, 'UPDATE')
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'vault' AND c.relname = 'metadata_changes' AND c.relkind = 'r'
+  ), false) AS vault_changes_update,
+  COALESCE((
+    SELECT has_table_privilege(current_user, c.oid, 'DELETE')
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'vault' AND c.relname = 'metadata_changes' AND c.relkind = 'r'
+  ), false) AS vault_changes_delete
 FROM pg_roles r
 WHERE r.rolname = current_user
 `;
@@ -131,6 +186,18 @@ export function privilegeFailures(kind: "read" | "confirm", probe: PrivilegeProb
     if (probe.confirmations_insert || probe.confirmations_update || probe.confirmations_delete) {
       failures.push("role can modify confirmations");
     }
+    if (!probe.vault_schema_usage) failures.push("role cannot use schema vault");
+    if (!probe.vault_metadata_select) failures.push("role cannot select vault metadata");
+    if (
+      probe.vault_metadata_insert ||
+      probe.vault_metadata_update ||
+      probe.vault_metadata_delete ||
+      probe.vault_changes_insert ||
+      probe.vault_changes_update ||
+      probe.vault_changes_delete
+    ) {
+      failures.push("role can modify vault metadata");
+    }
   } else {
     if (probe.accounts_select) failures.push("role can select public.accounts");
     if (probe.public_schema_usage) failures.push("role can use schema public");
@@ -139,6 +206,12 @@ export function privilegeFailures(kind: "read" | "confirm", probe: PrivilegeProb
     if (probe.confirmations_update || probe.confirmations_delete) failures.push("role can modify confirmations");
     if (probe.candidates_insert) failures.push("role can modify candidates");
     if (probe.reviews_insert) failures.push("role can write reviews");
+    if (!probe.vault_schema_usage) failures.push("role cannot use schema vault");
+    if (!probe.vault_metadata_select) failures.push("role cannot select vault metadata");
+    if (!probe.vault_metadata_insert || !probe.vault_metadata_update) failures.push("role cannot update vault metadata");
+    if (probe.vault_metadata_delete) failures.push("role can remove vault metadata");
+    if (!probe.vault_changes_insert) failures.push("role cannot record vault name changes");
+    if (probe.vault_changes_update || probe.vault_changes_delete) failures.push("role can modify vault name history");
   }
   return failures;
 }

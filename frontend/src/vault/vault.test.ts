@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { keccak256, type Address, type Hex } from "viem";
 import { summarize, type VaultLog } from "./activity";
 import { agreementStatus, agreementUrl } from "./agreements";
+import { COMPENSATION_NOTICE } from "./CompensationNotice";
+import { displayVaultName, vaultMatchesQuery } from "./names";
 import { awaitingFunding, cutoffParts, formatFixed, groupOf, roundedGroups, roundedHoldings, roundToTotal } from "./breakdown";
 import { AUDITED_CREATION_KECCAK, checkCatalog, CREATE2_FACTORY, vaultAddress, type Catalog, type CutoffDelegations } from "./catalog";
 import { effectiveFee, parseAddress, parseFeePercent, parseOne, percentFromBps, percentFromRate } from "./format";
@@ -283,6 +285,23 @@ describe("governor agreement status", () => {
 
   it("says when governors.country lists no agreement", () => {
     expect(agreementStatus(vault, new Map()).state).toBe("none");
+  });
+});
+
+describe("vault names and compensation notice", () => {
+  const entry = { vault: FORTUNE, name: "Fortune", validator_one1: "one1fortune", validator: FORTUNE };
+
+  it("uses a signed name when one is stored, and still matches the cutoff name", () => {
+    const names = new Map([[FORTUNE.toLowerCase(), "Fortune Validator"]]);
+    expect(displayVaultName(entry, names)).toBe("Fortune Validator");
+    expect(displayVaultName(entry, new Map())).toBe("Fortune");
+    expect(vaultMatchesQuery(entry, "Fortune Validator", "fortune")).toBe(true);
+    expect(vaultMatchesQuery(entry, "Fortune Validator", "0xnope")).toBe(false);
+  });
+
+  it("states that unsigned vaults do not receive compensation", () => {
+    expect(COMPENSATION_NOTICE).toMatch(/quarterly compensation/);
+    expect(COMPENSATION_NOTICE).toMatch(/will not receive any compensation/);
   });
 });
 

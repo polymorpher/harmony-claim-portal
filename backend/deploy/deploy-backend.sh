@@ -32,7 +32,12 @@ pnpm --filter @hcp/backend build
 
 release="$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
 stage="$(mktemp -d)"
-trap 'rm -rf "$stage"' EXIT
+rpc_file=""
+cleanup() {
+  rm -rf "$stage"
+  if [ -n "$rpc_file" ]; then rm -f "$rpc_file"; fi
+}
+trap cleanup EXIT
 
 log "staging release $release"
 mkdir -p "$stage/app/backend" "$stage/app/shared" "$stage/app/frontend" "$stage/app/db/migrations" "$stage/app/db/seed" "$stage/app/db/ops"
@@ -50,9 +55,20 @@ tar -C "$stage/app" -czf "$stage/release.tgz" .
 
 log "uploading to $VM_NAME"
 vm_scp "$stage/release.tgz" "$VM_NAME:/tmp/harmony-claim-api-$release.tgz"
+if [ -n "${VAULT_ETH_RPC_URLS:-}" ]; then
+  rpc_file="$(mktemp)"
+  ( umask 077; printf 'VAULT_ETH_RPC_URLS=%s\n' "$VAULT_ETH_RPC_URLS" >"$rpc_file" )
+  vm_scp "$rpc_file" "$VM_NAME:/tmp/harmony-claim-vault-rpc.env"
+fi
 
 remote_script=$(cat <<EOF
 set -euo pipefail
+rpc_flag=""
+if [ -f /tmp/harmony-claim-vault-rpc.env ]; then
+  sudo install -m 600 -o root -g root /tmp/harmony-claim-vault-rpc.env /run/harmony-claim-vault-rpc.env
+  rm -f /tmp/harmony-claim-vault-rpc.env
+  rpc_flag="--vault-rpc-file /run/harmony-claim-vault-rpc.env"
+fi
 release="$release"
 app_dir="$APP_DIR"
 env_file="$APP_ENV_FILE"
@@ -103,7 +119,8 @@ sudo bash db/ops/setup-roles.sh --vm \
   --db-name "$DB_NAME" \
   --domain "$DOMAIN" \
   --api-env "\$env_file" \
-  ${CONFIRM_BACKUP_BUCKET:+--backup-bucket "$CONFIRM_BACKUP_BUCKET"}
+  ${CONFIRM_BACKUP_BUCKET:+--backup-bucket "$CONFIRM_BACKUP_BUCKET"} \
+  \$rpc_flag
 
 sudo install -m 0644 harmony-claim-api.service "/etc/systemd/system/\$service.service"
 sudo install -m 0644 harmony-claim-confirm.service /etc/systemd/system/harmony-claim-confirm.service

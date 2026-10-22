@@ -2,6 +2,7 @@ import { useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { isAddress } from "viem";
 import { useAccount, useConnect, useDisconnect } from "wagmi";
+import { fetchVaultMetadata } from "../api";
 import { formatDate, shortAddress } from "../format";
 import { LEDGER_APP_LABEL, LedgerAccounts } from "../ledger/LedgerAccounts";
 import { useLedger, type LedgerSession } from "../ledger/useLedger";
@@ -11,6 +12,7 @@ import { connectErrorText, isConnecting } from "../wallet";
 import { walletConnectConnector } from "../wagmi";
 import { readAgreements } from "./agreements";
 import { findVault, loadCatalog, type Catalog } from "./catalog";
+import { displayVaultName } from "./names";
 import { chainById } from "./chain";
 import { useVaultSigner, type VaultSigner } from "./useVaultSigner";
 import { VaultDetail } from "./VaultDetail";
@@ -104,6 +106,11 @@ function WalletPanel({ ledger, signer, catalog }: { ledger: LedgerSession; signe
 export function VaultPage({ path }: { path: string }) {
   const ledger = useLedger();
   const catalog = useQuery({ queryKey: ["vault-catalog"], queryFn: () => loadCatalog(), staleTime: Infinity, retry: 1 });
+  const metadata = useQuery({ queryKey: ["vault-metadata"], queryFn: fetchVaultMetadata, staleTime: 30_000, retry: 1 });
+  const names = useMemo(
+    () => new Map((metadata.data?.vaults ?? []).map((row) => [row.vault.toLowerCase(), row.name])),
+    [metadata.data],
+  );
   const signer = useVaultSigner(ledger, catalog.data?.chain_id);
   const target = path.startsWith("/vault/") ? path.slice("/vault/".length) : null;
   const entry = catalog.data && target && isAddress(target, { strict: false }) ? findVault(catalog.data, target) : undefined;
@@ -120,9 +127,10 @@ export function VaultPage({ path }: { path: string }) {
     asOf: catalog.data?.governor_agreements ? formatDate(catalog.data.governor_agreements.checked_utc) : null,
   };
 
+  const titleName = entry ? displayVaultName(entry, names) : "";
   useEffect(() => {
-    document.title = entry ? `${entry.name || entry.validator_one1} · Governor Vaults` : "Governor Vaults · Harmony migration";
-  }, [entry]);
+    document.title = entry ? `${titleName} · Governor Vaults` : "Governor Vaults · Harmony migration";
+  }, [entry, titleName]);
 
   return (
     <div className="page">
@@ -141,7 +149,7 @@ export function VaultPage({ path }: { path: string }) {
       {catalog.isLoading && <p className="muted">Loading the vault list…</p>}
       {catalog.error && <p className="error">{catalog.error instanceof Error ? catalog.error.message : "The vault list could not be loaded."}</p>}
       {catalog.data && target === null && (
-        <VaultList catalog={catalog.data} account={signer.address ?? undefined} agreements={agreementInfo} />
+        <VaultList catalog={catalog.data} account={signer.address ?? undefined} agreements={agreementInfo} names={names} />
       )}
       {catalog.data && target !== null && !entry && (
         <section className="card">
@@ -156,7 +164,14 @@ export function VaultPage({ path }: { path: string }) {
         </section>
       )}
       {catalog.data && entry && (
-        <VaultDetail key={entry.vault} catalog={catalog.data} entry={entry} signer={signer} agreements={agreementInfo} />
+        <VaultDetail
+          key={entry.vault}
+          catalog={catalog.data}
+          entry={entry}
+          name={displayVaultName(entry, names)}
+          signer={signer}
+          agreements={agreementInfo}
+        />
       )}
     </div>
   );

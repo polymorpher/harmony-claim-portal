@@ -10,6 +10,7 @@ import { awaitingFunding, cutoffParts, displayUnit, formatRounded } from "./brea
 import { DelegatorBreakdown } from "./DelegatorBreakdown";
 import { AgreementBadge } from "./AgreementBadge";
 import { agreementStatus, AGREEMENTS_SITE, type AgreementInfo } from "./agreements";
+import { CompensationNotice } from "./CompensationNotice";
 import { effectiveFee, percentFromBps, percentFromRate } from "./format";
 import type { VaultSigner } from "./useVaultSigner";
 import { VaultActions } from "./VaultActions";
@@ -112,11 +113,13 @@ function ActivityText({ row, chainId, you, reserve }: { row: ActivityRow; chainI
 export function VaultDetail({
   catalog,
   entry,
+  name,
   signer,
   agreements,
 }: {
   catalog: Catalog;
   entry: CatalogVault;
+  name: string;
   signer: VaultSigner;
   agreements: AgreementInfo;
 }) {
@@ -188,8 +191,9 @@ export function VaultDetail({
           </a>
         </p>
         <h2 className="vault-name">
-          {entry.name || entry.validator_one1} <AgreementBadge status={agreement} asOf={agreements.asOf} />
+          {name} <AgreementBadge status={agreement} asOf={agreements.asOf} />
         </h2>
+        {agreement.state !== "signed" && <CompensationNotice />}
         <dl className="addr">
           <dt>Governor vault</dt>
           <dd>
@@ -197,6 +201,12 @@ export function VaultDetail({
               <code>{entry.vault}</code>
             </a>
           </dd>
+          {name !== entry.name && entry.name && (
+            <>
+              <dt>Name at the cutoff</dt>
+              <dd>{entry.name}</dd>
+            </>
+          )}
           <dt>Harmony validator</dt>
           <dd>
             <code>{entry.validator_one1}</code> · <code>{entry.validator}</code>
@@ -233,11 +243,14 @@ export function VaultDetail({
           ) : (
             <div className="wide">
               <span className="label">Vault</span>
-              <span className="big">{status === "not_deployed" ? "Not deployed yet" : status === "waiting" ? "Waiting for funding" : "…"}</span>
-              {status !== "loading" && pending.count > 0 && (
+              <span className="big">{status === "not_deployed" ? "No vault deployed" : status === "waiting" ? "Waiting for funding" : "…"}</span>
+              {status === "not_deployed" && (
+                <span className="hint">A vault was deployed only for a validator with at least 10,000 ONE.</span>
+              )}
+              {status === "waiting" && pending.count > 0 && (
                 <span className="hint">
-                  {status === "not_deployed" ? "Once deployed and funded, the" : "When the reserve funds it, the"} vault will credit{" "}
-                  {pending.count.toLocaleString()} approved delegators with {formatRounded(pending.atto, display)} ONE.
+                  When the reserve funds it, the vault will credit {pending.count.toLocaleString()} approved delegators with{" "}
+                  {formatRounded(pending.atto, display)} ONE.
                 </span>
               )}
             </div>
@@ -362,6 +375,7 @@ export function VaultDetail({
         <VaultActions
           catalog={catalog}
           entry={entry}
+          name={name}
           detail={d}
           signer={signer}
           isGovernor={isGovernor}

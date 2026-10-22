@@ -10,6 +10,11 @@ describe("process configuration", () => {
     expect(upstreamFor("/api/health")).toBe("claim");
     expect(upstreamFor("/api/v1/claims/0xabc")).toBe("claim");
     expect(upstreamFor("/api/v1/confirmations-other")).toBe("claim");
+    expect(upstreamFor("/api/v1/vault-metadata")).toBe("claim");
+    expect(upstreamFor("/api/v1/vault-metadata", "HEAD")).toBe("claim");
+    expect(upstreamFor("/api/v1/vault-metadata/names", "POST")).toBe("confirm");
+    expect(upstreamFor("/api/v1/vault-metadata/name-challenges", "POST")).toBe("confirm");
+    expect(upstreamFor("/api/v1/vault-metadata-other", "POST")).toBe("claim");
   });
 
   it("refuses the owner URL on a production API process", () => {
@@ -36,5 +41,20 @@ describe("process configuration", () => {
     });
     expect(confirm.domain).toBe("migrate.country");
     expect(confirm.challengeTtlSeconds).toBe(600);
+    expect(confirm.vaultEthRpcUrls).toEqual([]);
+  });
+
+  it("accepts https vault RPC URLs and refuses anything else", () => {
+    const cfg = loadConfirmConfig({
+      CONFIRM_DATABASE_URL: "postgres://claim_confirm@127.0.0.1/claims",
+      CONFIRM_DOMAIN: "migrate.country",
+      VAULT_ETH_RPC_URLS: "https://rpc.example/a, https://rpc.example/b",
+    });
+    expect(cfg.vaultEthRpcUrls).toEqual(["https://rpc.example/a", "https://rpc.example/b"]);
+    expect(() => loadConfirmConfig({
+      CONFIRM_DATABASE_URL: "postgres://claim_confirm@127.0.0.1/claims",
+      CONFIRM_DOMAIN: "migrate.country",
+      VAULT_ETH_RPC_URLS: "http://rpc.example",
+    })).toThrow(/https/);
   });
 });

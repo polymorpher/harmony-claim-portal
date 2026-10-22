@@ -5,11 +5,14 @@ import type { ConfirmConfig } from "../config.js";
 import { registerApiSafety, registerNotFound } from "../http.js";
 import { ConfirmService } from "./service.js";
 import type { ConfirmStore } from "./store.js";
+import { readSignatureScheme, type VaultNameService } from "../vault/service.js";
 
 export interface ConfirmAppOptions {
   config: Pick<ConfirmConfig, "rateLimitMax" | "rateLimitWindow" | "logLevel" | "trustProxy" | "domain" | "challengeTtlSeconds">;
   store: ConfirmStore;
   now?: () => Date;
+  /** Signed governor-vault name changes. The routes are absent without it. */
+  names?: VaultNameService;
 }
 
 export async function buildConfirmApp(opts: ConfirmAppOptions): Promise<FastifyInstance> {
@@ -80,8 +83,52 @@ export async function buildConfirmApp(opts: ConfirmAppOptions): Promise<FastifyI
     },
   );
 
+  if (opts.names) registerVaultNameRoutes(app, opts.names);
+
   registerNotFound(app);
   return app;
+}
+
+function registerVaultNameRoutes(app: FastifyInstance, names: VaultNameService): void {
+  app.post<{ Body: { vault?: unknown; name?: unknown } }>("/api/v1/vault-metadata/name-challenges", async (req) => {
+    const body = req.body ?? {};
+    return names.challenge(readText(body.vault, "vault"), readText(body.name, "name"));
+  });
+
+  app.post<{
+    Body: {
+      vault?: unknown;
+      name?: unknown;
+      nonce?: unknown;
+      issued_at?: unknown;
+      signature?: unknown;
+      signature_scheme?: unknown;
+    };
+  }>("/api/v1/vault-metadata/names", async (req) => {
+    const body = req.body ?? {};
+    if (typeof body.nonce !== "string" || typeof body.issued_at !== "string" || typeof body.signature !== "string") {
+      const err = new Error("nonce, issued_at, and signature are required");
+      (err as { statusCode?: number }).statusCode = 400;
+      throw err;
+    }
+    return names.submit(
+      readText(body.vault, "vault"),
+      readText(body.name, "name"),
+      body.nonce,
+      body.issued_at,
+      body.signature,
+      readSignatureScheme(body.signature_scheme),
+    );
+  });
+}
+
+function readText(value: unknown, field: string): string {
+  if (typeof value !== "string") {
+    const err = new Error(`${field} is required`);
+    (err as { statusCode?: number }).statusCode = 400;
+    throw err;
+  }
+  return value;
 }
 
 function readAddress(body: { address?: unknown } | undefined): string {

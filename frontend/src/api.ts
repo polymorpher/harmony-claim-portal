@@ -9,6 +9,9 @@ import type {
   ConfirmationStatus,
   MetaResponse,
   SignatureScheme,
+  VaultMetadataResponse,
+  VaultNameChallenge,
+  VaultNameRecord,
 } from "@hcp/shared";
 
 const BASE = "/api";
@@ -80,4 +83,23 @@ export const submitConfirmation = (
     data_version: dataVersion,
     policy_version: policyVersion,
     signature_scheme: signatureScheme,
+  });
+export const fetchVaultMetadata = () => request<VaultMetadataResponse>("/v1/vault-metadata");
+export const createVaultNameChallenge = (vault: string, name: string) =>
+  postJson<VaultNameChallenge>("/v1/vault-metadata/name-challenges", { vault, name });
+export const submitVaultName = (body: {
+  vault: string;
+  name: string;
+  nonce: string;
+  issuedAt: string;
+  signature: string;
+  signatureScheme: SignatureScheme;
+}) =>
+  postJson<VaultNameRecord>("/v1/vault-metadata/names", {
+    vault: body.vault,
+    name: body.name,
+    nonce: body.nonce,
+    issued_at: body.issuedAt,
+    signature: body.signature,
+    signature_scheme: body.signatureScheme,
   });

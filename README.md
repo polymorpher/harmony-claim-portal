@@ -21,6 +21,7 @@ db/migrations/005_confirm_schema.sql   confirmation candidates and append-only s
 db/migrations/006_confirm_signature_scheme.sql   records how each confirmation was signed
 db/migrations/009_tx_archive.sql   transaction archive for /history (archive_meta, archive_records)
 db/migrations/010_tx_archive_calldata.sql   calldata and function names for the archive (archive_methods)
+db/migrations/011_vault_metadata.sql   governor vault display names (schema vault)
 db/ops/                        role split, candidate load, confirmed-wallets report, export, review, backup (see db/ops/README.md)
 db/seed/reason_texts.json      reason_code -> user-facing title/text (+ apply-reason-texts.sh)
 injector/                      Python loaders: harmony-migration CSVs -> Postgres (COPY + atomic swap) for claims and the transaction archive; vault catalog builder
@@ -103,6 +104,14 @@ Confirmation routes:
 - `POST /api/v1/confirmations/challenges` - a random nonce and the exact message to sign; nothing is stored
 - `POST /api/v1/confirmations` - the signature, nonce, issued time, and `signature_scheme` (`personal_sign`, the default, or `harmony_ledger_tx`). The server rebuilds the message, checks it is still inside the time window, and verifies the signature under that scheme
 
+Governor vault names (off-chain; the contract is unchanged):
+
+- `GET /api/v1/vault-metadata` - every stored display name. The lookup process serves this. A vault with no row keeps the name from the catalog.
+- `POST /api/v1/vault-metadata/name-challenges` - body `{ vault, name }`. Returns the exact message to sign. Nothing is stored.
+- `POST /api/v1/vault-metadata/names` - body `{ vault, name, nonce, issued_at, signature, signature_scheme }`. The confirmation process rebuilds the message, checks the time window, reads `governor()` on Ethereum, and accepts the signature only when it is the current governor of an audited vault. The latest name is updated and the signed change is appended.
+
+`signature_scheme` is `personal_sign` or `harmony_ledger_tx`, the same two ways `/confirm` signs. A name is 1 to 80 characters with no line breaks. `fields` on the metadata row is reserved for later off-chain values; this API does not write it.
+
 ## Transaction history (`/history`)
 
 The Harmony explorer is shut down. `/history` keeps a fixed record of every
@@ -132,8 +141,13 @@ busiest address.
 Each Harmony validator's delegated stake at the cutoff is held in a governor
 vault on Ethereum (`GovernorDelegator` in harmony-migration), with the
 validator as its governor. `/vault` lists the deployed governor vaults and
-`/vault/<vault address>` shows one. The page has no backend. It loads one
-static file, `/vault-catalog.json`, and reads everything else on-chain:
+`/vault/<vault address>` shows one. It loads one static file,
+`/vault-catalog.json`, reads chain state on Ethereum and Base, and reads
+display names from `GET /api/v1/vault-metadata`. A vault was deployed only
+for a validator with at least 10,000 ONE. Validators below that are listed
+only when the page is asked to include them. Vaults whose governors have
+signed the governor agreement are listed first. The others stay in a collapsed
+section unless a search matches them.
 
 - From the catalog: each planned vault's validator, its Harmony name and
   commission at the cutoff, the initial governor, and per-vault totals of the
@@ -166,6 +180,12 @@ governor, sets the fee or transfers the role. Before the first withdrawal from
 an address the signer must agree to the release text in
 `frontend/src/vault/release.ts`; the browser remembers it per address in
 `localStorage`.
+
+The connected governor can set the vault's public name by signing the message
+from `POST /api/v1/vault-metadata/name-challenges`. That signature does not
+send a transaction. The Harmony Ledger apps can sign it; they still cannot
+send an Ethereum transaction. The name is the validator's name at the cutoff
+until a governor changes it.
 
 Wallets: browser wallets, WalletConnect, and Ledger over USB. The Ledger
 Ethereum app signs EIP-1559 transactions (`44'/60'` paths; contract calls need
@@ -254,7 +274,7 @@ All scripts are idempotent bash over `gcloud`/`curl`; re-running is safe.
    5. `infra/cloudflare/setup-dns.sh --acme-only` - creates only the DNS-only `_acme-challenge` CNAMEs.
    6. `infra/gcp/30-setup-load-balancer.sh` - waits for the certificate to report `ACTIVE` without sending traffic to an unready origin.
 3. Application:
-   1. `backend/deploy/deploy-backend.sh` - builds locally, uploads over IAP, applies pending `db/migrations/*.sql`, seeds reason texts, runs `db/ops/setup-roles.sh --vm`, installs the lookup, confirmation, and proxy units, restarts, health-checks.
+   1. `backend/deploy/deploy-backend.sh` - builds locally, uploads over IAP, applies pending `db/migrations/*.sql`, seeds reason texts, runs `db/ops/setup-roles.sh --vm`, installs the lookup, confirmation, and proxy units, restarts, health-checks. When `VAULT_ETH_RPC_URLS` is set, it is written into the confirm process env so a governor can change a vault's name.
    2. `python3 injector/build_vault_catalog.py --migration-repo ~/git/harmony-migration --portal-export <approved vault-shares export>` - writes `frontend/public/vault-catalog.json` for `/vault`. It lists every planned vault, so new deployments and fundings need no rerun; rerun when the migration's vault inputs change or after approving more confirmations.
    3. `frontend/deploy/deploy-frontend.sh` - builds, `gcloud storage rsync` to the bucket, cache headers, CDN invalidation.
 4. Data:

@@ -1,9 +1,17 @@
 import http from "node:http";
 
-export function upstreamFor(pathname: string): "confirm" | "claim" {
-  return pathname === "/api/v1/confirmations" || pathname.startsWith("/api/v1/confirmations/")
-    ? "confirm"
-    : "claim";
+export function upstreamFor(pathname: string, method = "GET"): "confirm" | "claim" {
+  if (pathname === "/api/v1/confirmations" || pathname.startsWith("/api/v1/confirmations/")) return "confirm";
+  // Names are public reads. A signed change is checked by the confirm process.
+  const upper = method.toUpperCase();
+  if (
+    (pathname === "/api/v1/vault-metadata" || pathname.startsWith("/api/v1/vault-metadata/")) &&
+    upper !== "GET" &&
+    upper !== "HEAD"
+  ) {
+    return "confirm";
+  }
+  return "claim";
 }
 
 function envInt(name: string, fallback: number): number {
@@ -35,7 +43,7 @@ export function startProxy(opts?: {
       res.end("bad request");
       return;
     }
-    const base = new URL(upstreamFor(pathname) === "confirm" ? confirmUpstream : claimUpstream);
+    const base = new URL(upstreamFor(pathname, req.method ?? "GET") === "confirm" ? confirmUpstream : claimUpstream);
     const headers = { ...req.headers, host: base.host };
     const upstream = http.request(
       {

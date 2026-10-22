@@ -21,6 +21,8 @@ export interface ConfirmConfig {
   enforceDbPrivileges: boolean;
   domain: string;
   challengeTtlSeconds: number;
+  /** Ethereum HTTPS endpoints used to read a vault's governor. Empty: name changes are refused. */
+  vaultEthRpcUrls: string[];
 }
 
 function envBool(env: NodeJS.ProcessEnv, name: string, fallback: boolean): boolean {
@@ -35,6 +37,24 @@ function envInt(env: NodeJS.ProcessEnv, name: string, fallback: number): number 
   const n = Number.parseInt(v, 10);
   if (!Number.isFinite(n) || n <= 0) throw new Error(`${name} must be a positive integer`);
   return n;
+}
+
+function vaultRpcUrls(env: NodeJS.ProcessEnv): string[] {
+  const raw = env.VAULT_ETH_RPC_URLS?.trim() ?? "";
+  if (!raw) return [];
+  const urls = raw.split(",").map((part) => part.trim()).filter(Boolean);
+  for (const url of urls) {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new Error("VAULT_ETH_RPC_URLS has an entry that is not an https URL");
+    }
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
+      throw new Error("VAULT_ETH_RPC_URLS has an entry that is not an https URL");
+    }
+  }
+  return urls;
 }
 
 function assertProductionRole(env: NodeJS.ProcessEnv, urlName: string): void {
@@ -83,5 +103,6 @@ export function loadConfirmConfig(env: NodeJS.ProcessEnv = process.env): Confirm
     enforceDbPrivileges: envBool(env, "ENFORCE_DB_PRIVILEGES", true),
     domain,
     challengeTtlSeconds: envInt(env, "CHALLENGE_TTL_SECONDS", 600),
+    vaultEthRpcUrls: vaultRpcUrls(env),
   };
 }

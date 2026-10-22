@@ -1,5 +1,6 @@
+import { type SignatureScheme } from "@hcp/shared";
 import { recoverTransactionAddress, serializeTransaction, type Address, type Hex, type TransactionSerializableEIP1559 } from "viem";
-import { useAccount } from "wagmi";
+import { useAccount, useSignMessage } from "wagmi";
 import { getAccount, sendTransaction, switchChain } from "wagmi/actions";
 import { HARMONY_APP_CANNOT_SIGN } from "../ledger/apps";
 import { LedgerError } from "../ledger/transport";
@@ -19,6 +20,8 @@ export interface VaultSigner {
   blockedReason: string | null;
   /** Signs and broadcasts; resolves with the transaction hash. */
   send(call: ContractCall): Promise<Hex>;
+  /** Signs a message. Harmony Ledger apps can do this even when they cannot send an Ethereum transaction. */
+  signMessage(message: string): Promise<{ signature: Hex; scheme: SignatureScheme }>;
 }
 
 const GAS_HEADROOM_PERCENT = 120n;
@@ -28,6 +31,7 @@ type ConfigChainId = (typeof wagmiConfig.chains)[number]["id"];
 /** The connected account, preferring a Ledger over USB like the confirm page does. */
 export function useVaultSigner(ledger: LedgerSession, chainId: number | undefined): VaultSigner {
   const { address: walletAddress, isConnected } = useAccount();
+  const { signMessageAsync } = useSignMessage();
   const ledgerAccount = ledger.account;
 
   if (ledgerAccount && ledger.app) {
@@ -35,6 +39,7 @@ export function useVaultSigner(ledger: LedgerSession, chainId: number | undefine
       address: ledgerAccount.address,
       via: "ledger",
       blockedReason: ledger.canSignTransactions ? null : HARMONY_APP_CANNOT_SIGN,
+      signMessage: (message) => ledger.sign(message, ledgerAccount.address),
       async send({ to, data }) {
         if (chainId === undefined) throw new Error("The vault list has not loaded.");
         const client = publicClient(chainId);
@@ -67,6 +72,9 @@ export function useVaultSigner(ledger: LedgerSession, chainId: number | undefine
       address: walletAddress,
       via: "wallet",
       blockedReason: null,
+      async signMessage(message) {
+        return { signature: await signMessageAsync({ message }), scheme: "personal_sign" };
+      },
       async send({ to, data }) {
         if (chainId === undefined) throw new Error("The vault list has not loaded.");
         const target = chainId as ConfigChainId;
@@ -81,6 +89,9 @@ export function useVaultSigner(ledger: LedgerSession, chainId: number | undefine
     via: null,
     blockedReason: null,
     async send() {
+      throw new Error("Connect a wallet first.");
+    },
+    async signMessage() {
       throw new Error("Connect a wallet first.");
     },
   };

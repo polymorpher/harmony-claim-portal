@@ -129,6 +129,12 @@ table.vaults a { font-weight: 600; text-decoration: none; }
 table.vaults a:hover { text-decoration: underline; }
 tr.planned td { color: var(--muted); }
 .vault-name { font-size: 1.35rem !important; word-break: break-word; }
+.vault-fold { margin-top: 18px; }
+.vault-fold summary, .vault-fold-title {
+  cursor: pointer; font-weight: 600; margin: 0 0 8px;
+}
+.vault-fold-title { cursor: default; font-size: 1rem; }
+.vault-fold summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .tag {
   display: inline-block; margin-left: 6px; padding: 0 7px; border-radius: 999px; font-size: 0.75rem;
   border: 1px solid var(--border); color: var(--muted); vertical-align: middle;

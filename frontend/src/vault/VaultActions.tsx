@@ -1,8 +1,10 @@
 import { useState, type FormEvent } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { encodeFunctionData, erc20Abi, formatUnits, type Address, type Hex } from "viem";
-import { hexToBech32 } from "@hcp/shared";
+import { hexToBech32, normalizeVaultName, type VaultMetadataResponse } from "@hcp/shared";
+import { ApiRequestError, createVaultNameChallenge, submitVaultName } from "../api";
 import { one } from "../format";
-import { transactionErrorText } from "../wallet";
+import { transactionErrorText, walletErrorText } from "../wallet";
 import { vaultAbi } from "./abi";
 import type { AgreementStatus } from "./agreements";
 import type { Catalog, CatalogVault } from "./catalog";
@@ -378,9 +380,92 @@ function GovernorForm({ catalog, entry, detail, commission, tx }: { catalog: Cat
   );
 }
 
+function nameError(err: unknown): string {
+  const wallet = walletErrorText(err);
+  if (wallet) return wallet;
+  if (err instanceof ApiRequestError) return err.message;
+  if (err instanceof Error && err.message) return err.message;
+  return "The name could not be saved.";
+}
+
+function NameForm({ entry, signer, name }: { entry: CatalogVault; signer: VaultSigner; name: string }) {
+  const queryClient = useQueryClient();
+  const [text, setText] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setSaved(false);
+    const next = normalizeVaultName(text);
+    if (!next) {
+      setError("Enter a name of 1 to 80 characters, without a line break.");
+      return;
+    }
+    if (next === name) {
+      setError("That is already the vault's name.");
+      return;
+    }
+    setError(null);
+    setBusy(true);
+    try {
+      const challenge = await createVaultNameChallenge(entry.vault, next);
+      const signed = await signer.signMessage(challenge.message);
+      const receipt = await submitVaultName({
+        vault: entry.vault,
+        name: challenge.name,
+        nonce: challenge.nonce,
+        issuedAt: challenge.issued_at,
+        signature: signed.signature,
+        signatureScheme: signed.scheme,
+      });
+      queryClient.setQueryData<VaultMetadataResponse>(["vault-metadata"], (old) => {
+        const vaults = (old?.vaults ?? []).filter((row) => row.vault.toLowerCase() !== receipt.vault.toLowerCase());
+        vaults.push(receipt);
+        return { vaults };
+      });
+      setText("");
+      setSaved(true);
+    } catch (err) {
+      setError(nameError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="action" onSubmit={(e) => void submit(e)}>
+      <h3>Public name</h3>
+      <p className="small">
+        The name shown on this site is currently {name}. Signing a message changes it. The signature does not send a
+        transaction or change the vault's governor, fee, or balances.
+      </p>
+      <label htmlFor="vault-name">New name</label>
+      <div className="row">
+        <input
+          id="vault-name"
+          autoComplete="off"
+          spellCheck={false}
+          maxLength={80}
+          placeholder={name}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+        />
+        <button type="submit" disabled={busy || text.trim() === ""}>
+          {busy ? "Waiting for signature…" : "Sign and save"}
+        </button>
+      </div>
+      {saved && <p className="ok-text">Saved.</p>}
+      {error && <p className="error">{error}</p>}
+    </form>
+  );
+}
+
 export function VaultActions({
   catalog,
   entry,
+  name,
   detail,
   signer,
   isGovernor,
@@ -390,6 +475,7 @@ export function VaultActions({
 }: {
   catalog: Catalog;
   entry: CatalogVault;
+  name: string;
   detail: VaultDetail;
   signer: VaultSigner;
   isGovernor: boolean;
@@ -441,6 +527,7 @@ export function VaultActions({
               with the validator's wallet on Base.
             </div>
           )}
+          <NameForm entry={entry} signer={signer} name={name} />
           {signer.blockedReason ? (
             <div className="banner warn">{signer.blockedReason}</div>
           ) : (

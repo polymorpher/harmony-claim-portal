@@ -11,6 +11,12 @@ describe("confirm grants", () => {
     expect(grants).toMatch(/REVOKE ALL ON SCHEMA public FROM PUBLIC/);
     expect(grants).toMatch(/GRANT CONNECT, TEMP, CREATE ON DATABASE %I TO claimapi/);
     expect(grants).toMatch(/GRANT SELECT, INSERT ON confirm\.confirmations TO claim_confirm/);
+    expect(grants).toMatch(/GRANT SELECT ON vault\.metadata TO claim_read/);
+    expect(grants).toMatch(/GRANT SELECT, INSERT, UPDATE ON vault\.metadata TO claim_confirm/);
+    expect(grants).toMatch(/GRANT INSERT ON vault\.metadata_changes TO claim_confirm/);
+    expect(grants).not.toMatch(/UPDATE ON vault\.metadata_changes/i);
+    expect(grants).not.toMatch(/vault\.metadata_changes TO claim_read/);
+    expect(grants).not.toMatch(/INSERT ON vault\.metadata TO claim_read/i);
     expect(grants).not.toMatch(/confirm\.challenges/);
     expect(grants).not.toMatch(/UPDATE ON confirm\.confirmations/i);
     expect(grants).not.toMatch(/DELETE/i);

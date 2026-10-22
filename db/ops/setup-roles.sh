@@ -11,8 +11,9 @@
 # /etc/harmony-claim-api.env (lookup, no owner URL) and
 # /etc/harmony-claim-confirm.env. Passwords are generated on this host and are
 # not printed. Re-running keeps an existing password when its env file is still
-# present, and keeps CONFIRM_BACKUP_BUCKET in the migrate env unless
-# --backup-bucket names another one.
+# present, keeps VAULT_ETH_RPC_URLS in the confirm env unless
+# --vault-rpc-file names a replacement, and keeps CONFIRM_BACKUP_BUCKET in
+# the migrate env unless --backup-bucket names another one.
 #
 # --rotate-owner (with --vm) gives the owner role claimapi a new password and
 # writes it to the migrate env, for example after the old one was exposed:
@@ -35,6 +36,7 @@ confirm_rate="${CONFIRM_RATE_LIMIT_MAX:-10}"
 ttl="${CHALLENGE_TTL_SECONDS:-600}"
 expose="${EXPOSE_CONTRACT_AMOUNTS:-false}"
 backup_bucket="${CONFIRM_BACKUP_BUCKET:-}"
+vault_rpc_file=""
 rotate_owner=0
 
 while [ "$#" -gt 0 ]; do
@@ -47,6 +49,7 @@ while [ "$#" -gt 0 ]; do
     --migrate-env) migrate_env="$2"; shift 2 ;;
     --confirm-env) confirm_env="$2"; shift 2 ;;
     --backup-bucket) backup_bucket="$2"; shift 2 ;;
+    --vault-rpc-file) vault_rpc_file="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -210,6 +213,33 @@ LOG_LEVEL=info
 TRUST_PROXY=true
 ENFORCE_DB_PRIVILEGES=true
 NODE_ENV=production"
+
+vault_rpc="$(env_value "$confirm_env" VAULT_ETH_RPC_URLS)"
+if [ -n "$vault_rpc_file" ]; then
+  case "$vault_rpc_file" in
+    *[!A-Za-z0-9/_.-]*) echo "invalid vault rpc file" >&2; exit 1 ;;
+  esac
+  file_rpc="$(env_value "$vault_rpc_file" VAULT_ETH_RPC_URLS)"
+  rm -f "$vault_rpc_file"
+  if [ -n "$file_rpc" ]; then vault_rpc="$file_rpc"; fi
+fi
+if [ -z "$vault_rpc" ] && [ -n "${VAULT_ETH_RPC_URLS:-}" ]; then
+  vault_rpc="$VAULT_ETH_RPC_URLS"
+fi
+if [ -n "$vault_rpc" ]; then
+  case "$vault_rpc" in
+    *[[:space:]]*|*[\"\'#]*) echo "VAULT_ETH_RPC_URLS has a character this env file cannot store" >&2; exit 1 ;;
+  esac
+  IFS=',' read -ra rpc_parts <<< "$vault_rpc"
+  for rpc_part in "${rpc_parts[@]}"; do
+    case "$rpc_part" in
+      https://*) ;;
+      *) echo "VAULT_ETH_RPC_URLS entries must be https URLs" >&2; exit 1 ;;
+    esac
+  done
+  confirm_body="${confirm_body}
+VAULT_ETH_RPC_URLS=${vault_rpc}"
+fi
 
 if [ "$mode" = "vm" ] && [ -f "$api_env" ] && grep -q '^DATABASE_URL=' "$api_env" && [ ! -f "${api_env}.pre-split" ]; then
   install -o root -g root -m 600 "$api_env" "${api_env}.pre-split"

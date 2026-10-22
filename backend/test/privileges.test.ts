@@ -18,6 +18,14 @@ function probe(overrides: Partial<PrivilegeProbe> = {}): PrivilegeProbe {
     confirmations_delete: false,
     candidates_insert: false,
     reviews_insert: false,
+    vault_schema_usage: true,
+    vault_metadata_select: true,
+    vault_metadata_insert: false,
+    vault_metadata_update: false,
+    vault_metadata_delete: false,
+    vault_changes_insert: false,
+    vault_changes_update: false,
+    vault_changes_delete: false,
     ...overrides,
   };
 }
@@ -43,6 +51,9 @@ describe("privilege checks", () => {
       public_schema_usage: false,
       confirm_schema_usage: true,
       confirmations_insert: true,
+      vault_metadata_insert: true,
+      vault_metadata_update: true,
+      vault_changes_insert: true,
     }))).toEqual([]);
   });
 
@@ -66,5 +77,20 @@ describe("privilege checks", () => {
     const failures = privilegeFailures("read", probe({ confirm_schema_usage: true, confirmations_insert: true }));
     expect(failures.join(" ")).toMatch(/schema confirm/);
     expect(failures.join(" ")).toMatch(/modify confirmations/);
+  });
+
+  it("rejects a confirm role that can rewrite vault name history", () => {
+    const failures = privilegeFailures("confirm", probe({
+      role_name: "claim_confirm",
+      accounts_select: false,
+      public_schema_usage: false,
+      confirm_schema_usage: true,
+      confirmations_insert: true,
+      vault_metadata_insert: true,
+      vault_metadata_update: true,
+      vault_changes_insert: true,
+      vault_changes_update: true,
+    }));
+    expect(failures.join(" ")).toMatch(/vault name history/);
   });
 });

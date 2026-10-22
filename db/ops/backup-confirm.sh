@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Back up schema confirm. Claim tables can be rebuilt from harmony-migration;
-# signed confirmations cannot.
+# Back up schemas confirm and vault. Claim tables can be rebuilt from
+# harmony-migration; signed confirmations and vault name changes cannot.
 #
 #   db/ops/backup-confirm.sh --dsn "$OWNER_DSN"
 #   CONFIRM_BACKUP_BUCKET=my-private-bucket db/ops/backup-confirm.sh --dsn "$OWNER_DSN"
@@ -65,8 +65,14 @@ if [ -f "$here/pgpass.sh" ]; then
   if [ -f "$secrets/pgpass" ]; then export PGPASSFILE="$secrets/pgpass"; fi
 fi
 
-log "dumping schema confirm"
-pg_dump "$dsn" --schema=confirm --format=custom --no-owner --file="$out"
+schemas=(--schema=confirm)
+if psql "$dsn" -tAc "SELECT 1 FROM pg_namespace WHERE nspname = 'vault'" | grep -qx 1; then
+  schemas+=(--schema=vault)
+  log "dumping schemas confirm and vault"
+else
+  log "dumping schema confirm"
+fi
+pg_dump "$dsn" "${schemas[@]}" --format=custom --no-owner --file="$out"
 chmod 600 "$out"
 log "wrote $out"
 shopt -s nullglob

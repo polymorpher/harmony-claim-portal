@@ -4,15 +4,19 @@ These scripts are safe to commit. Database passwords, owner URLs, and claim
 exports stay out of the repository: passwords are generated on the host, and
 exports go under `data/`, which is gitignored.
 
-The lookup API connects as `claim_read` (select on the public ledger only).
-The confirmation API connects as `claim_confirm` (insert evidence in schema
-`confirm` only). Migrations and `injector/inject_claims.py` connect as
-`claimapi`, the owner. That URL is in `/etc/harmony-claim-migrate.env`, mode
-`0600`, owned by root. It is not in the API environment files.
+The lookup API connects as `claim_read` (select on the public ledger, and on
+`vault.metadata`). The confirmation API connects as `claim_confirm` (insert
+evidence in schema `confirm`, and replace a governor vault's current off-chain
+name in schema `vault` while appending the signed change). Migrations and
+`injector/inject_claims.py` connect as `claimapi`, the owner. That URL is in
+`/etc/harmony-claim-migrate.env`, mode `0600`, owned by root. It is not in the
+API environment files.
 
-`claim_confirm` cannot update or delete a confirmation. A second signature for
-the same address and data version is rejected. Reviews are a separate append
-by the owner role. The injector's table swap does not include schema `confirm`.
+`claim_confirm` cannot update or delete a confirmation, and cannot change a
+stored name without appending the signed change. A second signature for the
+same address and data version is rejected. Reviews are a separate append by
+the owner role. The injector's table swap does not include schema `confirm`
+or schema `vault`.
 
 A stored signature is not migration authorization. `export-confirmations.sh`
 writes the evidence for an offline check that recovers every signer and
@@ -378,9 +382,11 @@ the export.
 | `harmony-claim-confirm` | `127.0.0.1:8082` | `claim_confirm` |
 
 The load balancer still sends `/api/*` to port 8080. The proxy forwards
-`/api/v1/confirmations` to the confirmation process and every other path to
-the lookup process. Both API processes refuse to start if their role can
-modify a ledger table.
+`/api/v1/confirmations` and name-change posts under `/api/v1/vault-metadata/`
+to the confirmation process. `GET /api/v1/vault-metadata` and every other path
+go to the lookup process. Both API processes refuse to start if their role can
+modify a ledger table, if the lookup role can write a vault name, or if the
+confirmation role can rewrite name history.
 
 `/confirm` is uploaded as its own object so the site returns HTTP 200. The
 bucket's website error page would otherwise serve the app with status 404.

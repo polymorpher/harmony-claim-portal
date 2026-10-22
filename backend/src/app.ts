@@ -5,6 +5,7 @@ import { buildClaimResponse, buildMeta } from "./claims.js";
 import type { Config } from "./config.js";
 import { clientKey, registerApiSafety, registerNotFound } from "./http.js";
 import type { ClaimRepository } from "./repository.js";
+import type { VaultNameService } from "./vault/service.js";
 
 export { clientKey };
 
@@ -13,6 +14,8 @@ export interface AppOptions {
   repo: ClaimRepository;
   /** Transaction archive (/api/v1/archive/*); its routes are absent without it. */
   archive?: ArchiveRepository;
+  /** Current governor-vault names. The route is absent without it. */
+  vaultNames?: Pick<VaultNameService, "list">;
 }
 
 export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
@@ -63,6 +66,11 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   });
 
   if (opts.archive) registerArchiveRoutes(app, opts.archive);
+
+  if (opts.vaultNames) {
+    const names = opts.vaultNames;
+    app.get("/api/v1/vault-metadata", async () => ({ vaults: await names.list() }));
+  }
 
   registerNotFound(app);
 
