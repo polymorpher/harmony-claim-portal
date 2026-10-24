@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Unit tests for the vault catalog's cutoff breakdown (injector/build_vault_catalog.py). No network."""
 
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_vault_catalog as bvc  # noqa: E402
@@ -98,6 +101,57 @@ class BreakdownTest(unittest.TestCase):
         self.assertEqual(bvc.rate_text("0"), "0")
         with self.assertRaises(SystemExit):
             bvc.rate_text("1.5")
+
+
+def agreement_id(n):
+    return "0x" + f"{n:064x}"
+
+
+class RefreshAgreementsTest(unittest.TestCase):
+    def setUp(self):
+        self.a, self.b, self.c = "0x" + "aa" * 20, "0x" + "bb" * 20, "0x" + "cc" * 20
+        self.catalog = {
+            "format": bvc.FORMAT,
+            "chain_id": 1,
+            "governor_agreements": {"source": "old", "sha256": "0", "count": 2, "checked_utc": "2026-10-13T01:37:10Z"},
+            "vaults": [
+                {"validator": self.a.upper().replace("0X", "0x"), "name": "renewed", "vault": addr(1),
+                 "agreement": {"id": agreement_id(1), "signed": False}},
+                {"validator": self.b, "name": "unchanged", "vault": addr(2), "agreement": {"id": agreement_id(2), "signed": True}},
+                {"validator": self.c, "name": "newly listed", "vault": addr(3)},
+            ],
+        }
+
+    def refresh(self, listed, signed):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "agreements.json"
+            source.write_text(json.dumps([{"address": a, "agreementId": i, "url": bvc.AGREEMENT_URL.format(i)}
+                                          for a, i in listed]))
+            with mock.patch.object(bvc, "agreements_signed", return_value=signed) as read:
+                return bvc.refresh_agreements(self.catalog, str(source), ["rpc"]), read
+
+    def test_takes_the_current_ids_and_their_status(self):
+        got, read = self.refresh([(self.a, agreement_id(11)), (self.b, agreement_id(2)), (self.c, agreement_id(3))],
+                                 {agreement_id(11): True, agreement_id(2): True, agreement_id(3): False})
+        read.assert_called_once_with([agreement_id(2), agreement_id(3), agreement_id(11)], ["rpc"])
+        self.assertEqual([v.get("agreement") for v in got["vaults"]],
+                         [{"id": agreement_id(11), "signed": True}, {"id": agreement_id(2), "signed": True},
+                          {"id": agreement_id(3), "signed": False}])
+        self.assertEqual(got["governor_agreements"]["count"], 3)
+        self.assertNotEqual(got["governor_agreements"]["checked_utc"], "2026-10-13T01:37:10Z")
+
+    def test_changes_nothing_else(self):
+        got, _ = self.refresh([(self.a, agreement_id(1))], {agreement_id(1): False})
+        self.assertNotIn("agreement", got["vaults"][1])
+        for before, after in zip(self.catalog["vaults"], got["vaults"]):
+            self.assertEqual({k: v for k, v in before.items() if k != "agreement"},
+                             {k: v for k, v in after.items() if k != "agreement"})
+        self.assertEqual(list(got), list(self.catalog))
+        self.assertEqual(self.catalog["vaults"][1]["agreement"], {"id": agreement_id(2), "signed": True})
+
+    def test_refuses_another_format(self):
+        with self.assertRaises(SystemExit):
+            bvc.refresh_agreements({**self.catalog, "format": "other"}, "unused", ["rpc"])
 
 
 if __name__ == "__main__":
