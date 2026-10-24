@@ -124,6 +124,20 @@ the stage policy and the vault-share routing exceptions, and stops unless:
 `--start-block` defaults to the earliest deployment recorded for the chain in
 `airdrop/vault/deployments-*.csv` and `airdrop/runs/*/deployments-*.csv`.
 
+Each vault's governor agreement id comes from governors.country's
+`agreements.json`, with a snapshot of whether it is signed read from the
+registry on Base. governors.country replaces an expired agreement with a new
+one under a new id, so after a renewal the catalog points at the old
+agreements. `--agreements-only` reads `agreements.json` and the registry again
+and rewrites only each vault's `agreement` and the catalog's
+`governor_agreements` in the existing `--out` file; it needs neither the
+migration repo nor the Harmony RPC. The registry is read through `--base-rpc`
+(repeatable) or `$BASE_RPC_URLS` (comma-separated), else public Base RPCs.
+
+```sh
+BASE_RPC_URLS=https://base-mainnet.g.alchemy.com/v2/<key> python3 build_vault_catalog.py --agreements-only
+```
+
 ## Transaction archive
 
 `inject_archive.py` loads the transaction archive for `/history` from the

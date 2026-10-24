@@ -168,7 +168,10 @@ section unless a search matches them.
   snapshot of its status; the page reads the live signature count from the
   MetaLeX CyberAgreementRegistry (`0xa9E808B8eCBB60Bb19abF026B5b863215BC4c134`,
   `agreements(bytes32)`) in one multicall, and shows the snapshot until that
-  answers or if it fails.
+  answers or if it fails. A renewed agreement has a new id, so after
+  governors.country renews agreements, refresh the catalog's ids with
+  `build_vault_catalog.py --agreements-only` and redeploy the frontend;
+  until then the page reads the old agreements.
 
 A `feeBps` of 0 means the validator's Harmony commission at the cutoff applies;
 the page shows that commission and, once a governor sets a fee, the change.
@@ -205,6 +208,8 @@ python3 injector/build_vault_catalog.py --migration-repo ~/git/harmony-migration
 # Sepolia rehearsal vaults, for development:
 python3 injector/build_vault_catalog.py --chain-id 11155111 --portal-export $E --out frontend/public/vault-catalog.sepolia.json
 VITE_VAULT_CATALOG_URL=/vault-catalog.sepolia.json pnpm --filter @hcp/frontend dev
+# after governors.country renews agreements: only the agreement ids and their status
+python3 injector/build_vault_catalog.py --agreements-only
 ```
 
 `--portal-export` moves delegators approved on the portal out of "inactive":
@@ -275,7 +280,7 @@ All scripts are idempotent bash over `gcloud`/`curl`; re-running is safe.
    6. `infra/gcp/30-setup-load-balancer.sh` - waits for the certificate to report `ACTIVE` without sending traffic to an unready origin.
 3. Application:
    1. `backend/deploy/deploy-backend.sh` - builds locally, uploads over IAP, applies pending `db/migrations/*.sql`, seeds reason texts, runs `db/ops/setup-roles.sh --vm`, installs the lookup, confirmation, and proxy units, restarts, health-checks. When `VAULT_ETH_RPC_URLS` is set, it is written into the confirm process env so a governor can change a vault's name.
-   2. `python3 injector/build_vault_catalog.py --migration-repo ~/git/harmony-migration --portal-export <approved vault-shares export>` - writes `frontend/public/vault-catalog.json` for `/vault`. It lists every planned vault, so new deployments and fundings need no rerun; rerun when the migration's vault inputs change or after approving more confirmations.
+   2. `python3 injector/build_vault_catalog.py --migration-repo ~/git/harmony-migration --portal-export <approved vault-shares export>` - writes `frontend/public/vault-catalog.json` for `/vault`. It lists every planned vault, so new deployments and fundings need no rerun; rerun when the migration's vault inputs change or after approving more confirmations. After governors.country renews agreements, `--agreements-only` re-reads just the agreement ids and their status into the existing catalog.
    3. `frontend/deploy/deploy-frontend.sh` - builds, `gcloud storage rsync` to the bucket, cache headers, CDN invalidation.
 4. Data:
    - Until the embargo is lifted, load only synthetic data on the public VM:
