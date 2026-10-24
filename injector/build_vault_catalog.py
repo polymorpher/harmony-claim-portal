@@ -18,6 +18,7 @@ import csv
 import datetime as dt
 import hashlib
 import json
+import os
 import re
 import sys
 import time
@@ -266,6 +267,38 @@ def agreements_signed(ids: list[str], rpcs: list[str]) -> dict[str, bool]:
     return out
 
 
+def read_agreements(source: str, validators: list[str], rpcs: list[str]) -> tuple[dict[str, str], dict[str, bool], dict]:
+    """Each validator's agreement id, whether each listed agreement is signed now, and the catalog's record of both."""
+    agreements, meta = load_agreements(source)
+    signed = agreements_signed(sorted({agreements[v] for v in validators if v in agreements}), rpcs)
+    checked = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return agreements, signed, {**meta, "chain_id": 8453, "registry": AGREEMENT_REGISTRY, "checked_utc": checked}
+
+
+def agreement_entry(validator: str, agreements: dict[str, str], signed: dict[str, bool]) -> dict:
+    aid = agreements.get(validator)
+    return {"agreement": {"id": aid, "signed": signed[aid]}} if aid else {}
+
+
+def refresh_agreements(catalog: dict, source: str, rpcs: list[str]) -> dict:
+    """The catalog with every vault's agreement id and status read again; nothing else changes.
+
+    governors.country gives a renewed agreement a new id, so ids in an older catalog go stale.
+    """
+    if catalog.get("format") != FORMAT:
+        raise SystemExit(f"not a {FORMAT} catalog")
+    validators = [v["validator"].lower() for v in catalog["vaults"]]
+    agreements, signed, meta = read_agreements(source, validators, rpcs)
+    vaults = [{**{k: x for k, x in v.items() if k != "agreement"}, **agreement_entry(v["validator"].lower(), agreements, signed)}
+              for v in catalog["vaults"]]
+    return {**catalog, "governor_agreements": meta, "vaults": vaults}
+
+
+def base_rpcs(args: argparse.Namespace) -> list[str]:
+    from_env = [u.strip() for u in os.environ.get("BASE_RPC_URLS", "").split(",") if u.strip()]
+    return args.base_rpc or from_env or BASE_RPCS
+
+
 def start_block(repo: Path, chain_id: int) -> int | None:
     """Earliest vault deployment recorded for the chain in harmony-migration's deployment ledgers."""
     airdrop = repo / "airdrop"
@@ -300,8 +333,7 @@ def build(args: argparse.Namespace) -> dict:
 
     validators = sorted(v for v in inputs.stages if v not in inputs.held)
     harmony, cutoff_time = harmony_validators(vb, args.harmony_rpc, validators)
-    agreements, agreements_meta = load_agreements(args.governor_agreements)
-    signed = agreements_signed(sorted({agreements[v] for v in validators if v in agreements}), BASE_RPCS)
+    agreements, signed, agreements_meta = read_agreements(args.governor_agreements, validators, base_rpcs(args))
 
     vaults = []
     for validator in validators:
@@ -321,7 +353,7 @@ def build(args: argparse.Namespace) -> dict:
             "vault": vb.vault_address(artifact, token, validator, governor),
             "commission_rate": rate_text(h["rate"]),
             "cutoff": {"delegators": count, "stake_atto": str(stake), **merged(categories)},
-            **({"agreement": {"id": agreements[validator], "signed": signed[agreements[validator]]}} if validator in agreements else {}),
+            **agreement_entry(validator, agreements, signed),
         })
 
     return {
@@ -341,8 +373,7 @@ def build(args: argparse.Namespace) -> dict:
         "portal_exports": [{"name": p.name, "sha256": hashlib.sha256(p.read_bytes()).hexdigest(), "time_utc": export_time(p)}
                            for p in exports],
         # `signed` on each vault's agreement is this snapshot; the page reads the registry live and falls back to it.
-        "governor_agreements": {**agreements_meta, "chain_id": 8453, "registry": AGREEMENT_REGISTRY,
-                                "checked_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")},
+        "governor_agreements": agreements_meta,
         "vaults": vaults,
     }
 
@@ -368,6 +399,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         "its approved positions are shown as confirmed instead of inactive. Repeatable.")
     p.add_argument("--governor-agreements", default=DEFAULT_AGREEMENTS, metavar="URL_OR_FILE",
                    help="governors.country agreements.json: each validator's governor agreement id")
+    p.add_argument("--agreements-only", action="store_true",
+                   help="only re-read the agreement ids and their status into the existing --out catalog "
+                        "(after governors.country renews agreements); needs no migration repo or Harmony RPC")
+    p.add_argument("--base-rpc", action="append", metavar="URL",
+                   help="Base RPC for the agreements' status (repeatable; default: $BASE_RPC_URLS, comma-separated, "
+                        "else public Base RPCs)")
     p.add_argument("--harmony-rpc", default=DEFAULT_HARMONY_RPC, help="Harmony shard-0 archive RPC")
     p.add_argument("--out", default=str(DEFAULT_OUT))
     return p.parse_args(argv)
@@ -375,11 +412,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    catalog = build(args)
     out = Path(args.out)
+    if args.agreements_only:
+        before = json.loads(out.read_text(encoding="utf-8"))
+        catalog = refresh_agreements(before, args.governor_agreements, base_rpcs(args))
+        old = {v["validator"]: (v.get("agreement") or {}).get("id") for v in before["vaults"]}
+        listed = [v for v in catalog["vaults"] if "agreement" in v]
+        changed = sum(1 for v in listed if v["agreement"]["id"] != old[v["validator"]])
+        summary = (f"{len(listed)} of {len(catalog['vaults'])} vaults have an agreement, {changed} new ids, "
+                   f"{sum(v['agreement']['signed'] for v in listed)} signed")
+    else:
+        catalog = build(args)
+        summary = f"{len(catalog['vaults'])} vaults on chain {catalog['chain_id']}, events from block {catalog['start_block']}"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(catalog, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
-    print(f"{out}: {len(catalog['vaults'])} vaults on chain {catalog['chain_id']}, events from block {catalog['start_block']}")
+    print(f"{out}: {summary}")
     return 0
 
 
