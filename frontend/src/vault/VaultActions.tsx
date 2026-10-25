@@ -503,7 +503,9 @@ export function VaultActions({
           </div>
         )}
         {signer.blockedReason ? (
-          <div className="banner warn block">{signer.blockedReason}</div>
+          <div className="banner warn block">
+            {signer.blockedReason} <a href="/ledger">What you can do</a>.
+          </div>
         ) : (
           wallet && (
             <div className="actions">
@@ -529,7 +531,9 @@ export function VaultActions({
           )}
           <NameForm entry={entry} signer={signer} name={name} />
           {signer.blockedReason ? (
-            <div className="banner warn">{signer.blockedReason}</div>
+            <div className="banner warn">
+              {signer.blockedReason} <a href="/ledger">What you can do</a>.
+            </div>
           ) : (
             <GovernorForm catalog={catalog} entry={entry} detail={detail} commission={commission} tx={governorTx} />
           )}

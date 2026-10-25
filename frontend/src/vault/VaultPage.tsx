@@ -74,7 +74,7 @@ function WalletPanel({ ledger, signer, catalog }: { ledger: LedgerSession; signe
       {ledger.error && <p className="error">{ledger.error}</p>}
       {signer.blockedReason && (
         <div className="banner warn">
-          <strong>View only.</strong> {signer.blockedReason}
+          <strong>View only.</strong> {signer.blockedReason} <a href="/ledger">What you can do</a>.
         </div>
       )}
       {signer.via === "wallet" && catalog && chainId !== catalog.chain_id && (
@@ -92,8 +92,9 @@ function WalletPanel({ ledger, signer, catalog }: { ledger: LedgerSession; signe
           )}
           <li>
             <strong>Ledger (USB)</strong>: the Ethereum app sends transactions; turn on Blind signing in its settings. The
-            Harmony apps, 2025 or older, can connect to view an address but cannot sign Ethereum transactions. Works in Chrome,
-            Edge, or Brave on a computer. Close Ledger Wallet first.
+            Harmony apps, 2025 or older, can connect to view an address but cannot sign Ethereum transactions (
+            <a href="/ledger">what to do with a Harmony Ledger address</a>). Works in Chrome, Edge, or Brave on a computer.
+            Close Ledger Wallet first.
             {!ledger.supported && " This browser cannot connect to a Ledger over USB."}
           </li>
         </ul>
