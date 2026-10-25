@@ -23,14 +23,17 @@ VITE_WALLETCONNECT_PROJECT_ID="${VITE_WALLETCONNECT_PROJECT_ID:-}" \
 [ -f frontend/dist/index.html ] || die "frontend/dist/index.html missing after build"
 # Only the mainnet catalog is published; rehearsal catalogs stay local.
 rm -f frontend/dist/vault-catalog.*.json
-# /confirm, /vault, /vault/<address> and /history must be real objects. The
+# /confirm, /vault, /vault/<address>, /history and /ledger must be real objects. The
 # bucket error page serves index.html with HTTP 404, which a CDN can cache.
 # History records are linked as /history?address=... or /history?tx=..., so
 # the one /history object covers them.
-mkdir -p frontend/dist/confirm frontend/dist/vault frontend/dist/history
+mkdir -p frontend/dist/confirm frontend/dist/vault frontend/dist/history frontend/dist/ledger
 cp frontend/dist/index.html frontend/dist/confirm/index.html
 cp frontend/dist/index.html frontend/dist/vault/index.html
 cp frontend/dist/index.html frontend/dist/history/index.html
+cp frontend/dist/index.html frontend/dist/ledger/index.html
+[ -f frontend/dist/ledger-key-tool.html ] && [ -f frontend/dist/ledger-key-tool.html.sha256 ] \
+  || die "frontend/dist/ledger-key-tool.html or its .sha256 is missing after build"
 if [ -f frontend/dist/vault-catalog.json ]; then
   # Checksummed names only: the page links to them, and a case-insensitive
   # filesystem cannot hold both spellings. Other spellings fall back to the
@@ -90,6 +93,19 @@ curl -fsS -X PATCH \
   --data '{"cacheControl":"no-cache","contentType":"text/html"}' \
   "https://storage.googleapis.com/storage/v1/b/${FRONTEND_BUCKET}/o/history" \
   >/dev/null
+curl -fsS -X POST \
+  -H "Authorization: Bearer ${token}" \
+  -H "Content-Type: text/html" \
+  -H "Cache-Control: no-cache" \
+  --data-binary @frontend/dist/index.html \
+  "https://storage.googleapis.com/upload/storage/v1/b/${FRONTEND_BUCKET}/o?uploadType=media&name=ledger" \
+  >/dev/null
+curl -fsS -X PATCH \
+  -H "Authorization: Bearer ${token}" \
+  -H "Content-Type: application/json" \
+  --data '{"cacheControl":"no-cache","contentType":"text/html"}' \
+  "https://storage.googleapis.com/storage/v1/b/${FRONTEND_BUCKET}/o/ledger" \
+  >/dev/null
 
 log "setting cache-control"
 # hashed assets are immutable; html must always be revalidated
@@ -101,6 +117,13 @@ gc storage objects update "$bucket/confirm/index.html" \
   --content-type="text/html" --cache-control="no-cache" >/dev/null
 gc storage objects update "$bucket/history/index.html" \
   --content-type="text/html" --cache-control="no-cache" >/dev/null
+gc storage objects update "$bucket/ledger/index.html" \
+  --content-type="text/html" --cache-control="no-cache" >/dev/null
+# The offline key tool and the hash /ledger shows for it must always match.
+gc storage objects update "$bucket/ledger-key-tool.html" \
+  --content-type="text/html" --cache-control="no-cache" >/dev/null
+gc storage objects update "$bucket/ledger-key-tool.html.sha256" \
+  --content-type="text/plain" --cache-control="no-cache" >/dev/null
 # vault/<address> objects have no extension, so their type is set here.
 gc storage objects update "$bucket/vault/**" \
   --content-type="text/html" --cache-control="no-cache" >/dev/null
