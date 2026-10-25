@@ -439,6 +439,67 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual([(c.id, c.decision) for c, _ in rows], [("2", "approved"), ("2", "approved")])
 
 
+def paid(kind, address=ALICE, amount=1000 * ONE, validator="", tx="0x" + "cd" * 32, block="26229140"):
+    return {"kind": kind, "address": address, "validator_address": validator,
+            "vault_address": "0x" + "ee" * 20 if kind == "vault" else "", "amount_atto": str(amount),
+            "block": block, "tx_hash": tx, "log_index": "3"}
+
+
+class ChainTests(unittest.TestCase):
+    def items(self, reviews=(), payments=()):
+        items = mod.build([confirmation()], [vault(staked=500 * ONE)], [])
+        mod.apply_reviews(items, mod.rt.ReviewState(list(reviews)))
+        mod.apply_chain(items, list(payments))
+        return items
+
+    def test_paid_and_marked_agree(self):
+        reviews = [review(1, 1, ALICE, "queued", "approved-1"),
+                   review(2, 1, ALICE, "included", "wallet:confirmed-wallets-1", at="2026-10-08T00:00:00Z"),
+                   review(3, 1, ALICE, "included", f"vault:vaults-3:{VAL1}", at="2026-10-21T00:00:00Z")]
+        c = self.items(reviews, [paid("wallet"), paid("vault", amount=300 * ONE, validator=VAL1),
+                                 paid("vault", amount=200 * ONE, validator=VAL1)])[0]
+        self.assertEqual(c.chain_problems(), [])
+        self.assertEqual(c.chain_text(), "wallet paid 1,000 | vault 1 of 1 credited")
+
+    def test_paid_but_not_marked_is_flagged(self):
+        c = self.items([review(1, 1, ALICE, "queued", "approved-1")],
+                       [paid("wallet"), paid("vault", amount=500 * ONE, validator=VAL1)])[0]
+        self.assertEqual([(part, check) for part, check, _, _ in c.chain_problems()],
+                         [("wallet", "paid, not marked"), ("vault Validator One", "paid, not marked")])
+
+    def test_marked_but_not_paid_and_amount_differs(self):
+        reviews = [review(1, 1, ALICE, "queued", "approved-1"),
+                   review(2, 1, ALICE, "included", "wallet:confirmed-wallets-1", at="2026-10-08T00:00:00Z")]
+        c = self.items(reviews, [paid("vault", amount=499 * ONE, validator=VAL1)])[0]
+        self.assertEqual([(part, check, status) for part, check, _, status in c.chain_problems()],
+                         [("wallet", "marked, not on chain", "sent"), ("vault Validator One", "amount differs", "pending")])
+
+    def test_a_deposit_without_a_position_and_other_wallets_payments(self):
+        c = self.items(payments=[paid("vault", amount=5 * ONE, validator=VAL2), paid("wallet", address=BOB)])[0]
+        self.assertEqual([(part, check) for part, check, _, _ in c.chain_problems()], [(f"vault {VAL2}", "no position")])
+        self.assertEqual(c.chain_wallet.amount, 0)
+
+    def test_report_section_and_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            deliveries = Path(tmp) / "deliveries.csv"
+            write(deliveries, [paid("wallet")])
+            text, _ = EndToEndTests().run_main(
+                tmp, "--deliveries", str(deliveries), "--chain-source", "Ethereum via rpc.example, up to block 26266473",
+                reviews=[review(1, 1, ALICE, "queued", "approved-1")])
+        self.assertIn("chain        Ethereum via rpc.example, up to block 26266473", text)
+        self.assertIn("chain         wallet paid 1,000 | vault 0 of 1 credited | CHECK wallet: paid, not marked", text)
+        self.assertIn(f"       1  {ALICE}  wallet: paid, not marked; ledger 1,000, on chain 1,000, status pending", text)
+        self.assertIn("0x" + "cd" * 32 + " (block 26,229,140)", text)
+        self.assertIn("on chain                wallet paid 1 wallet (1,000 ONE) | vault credited 0 positions (0 ONE)", text)
+        self.assertIn("chain vs marks          paid, not marked 1", text)
+
+    def test_without_deliveries_nothing_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text, _ = EndToEndTests().run_main(tmp)
+        self.assertNotIn("Chain check", text)
+        self.assertNotIn("on chain", text)
+
+
 class EndToEndTests(unittest.TestCase):
     def run_main(self, tmp, *flags, reviews=None):
         conf = Path(tmp) / "confirmations.csv"
