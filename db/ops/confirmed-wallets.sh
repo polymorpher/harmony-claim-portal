@@ -18,6 +18,12 @@
 #   db/ops/confirmed-wallets.sh --decision approved --wallet pending --csv   # input for the next wallet batch
 #   db/ops/confirmed-wallets.sh --decision approved --vault pending --csv    # input for the next vault batch
 #
+# Compare the sent marks with Ethereum (the reserve's transfers and vault deposits):
+#   db/ops/confirmed-wallets.sh --chain --decision approved --compact
+# The RPC is ETH_RPC_URL (environment or .env), else RPC_URL in
+# $HARMONY_MIGRATION_REPO/airdrop/.env (default ~/git/harmony-migration). Vault addresses come
+# from the vault catalog, frontend/public/vault-catalog.json unless --vault-catalog PATH.
+#
 # Without the tunnel (local database, or running on the VM itself):
 #   db/ops/confirmed-wallets.sh --no-tunnel --db-url postgres://claimapi:PASSWORD@127.0.0.1:5434/claims
 #   db/ops/confirmed-wallets.sh --no-tunnel      # uses CONFIRM_OWNER_URL or DATABASE_URL from .env
@@ -41,10 +47,14 @@ usage() { awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' 
 
 OWNER_DB_TUNNEL=1
 out_dir="$root/data/confirmed-wallets"
+chain=0
+catalog="$root/frontend/public/vault-catalog.json"
 extra=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --csv|--compact) extra+=("$1"); shift ;;
+    --chain) chain=1; shift ;;
+    --vault-catalog) catalog="$2"; shift 2 ;;
     --decision|--wallet|--vault|--run)
       [ "$#" -ge 2 ] || die "$1 needs a value"
       case "$1:$2" in
@@ -65,6 +75,24 @@ done
 
 require_tools psql python3
 
+# The Ethereum RPC for --chain; printed nowhere, passed to the reader in its environment only.
+chain_rpc() {
+  if [ -n "${ETH_RPC_URL:-}" ]; then
+    printf '%s' "$ETH_RPC_URL"
+    return
+  fi
+  local file="${HARMONY_MIGRATION_REPO:-$HOME/git/harmony-migration}/airdrop/.env" line
+  [ -f "$file" ] || return 0
+  line="$(grep -E '^RPC_URL=' "$file" | tail -1 || true)"
+  printf '%s' "${line#RPC_URL=}" | tr -d "\"'"
+}
+
+if [ "$chain" = 1 ]; then
+  [ -f "$catalog" ] || die "no vault catalog at $catalog (build it with injector/build_vault_catalog.py, or pass --vault-catalog)"
+  rpc="$(chain_rpc)"
+  [ -n "$rpc" ] || die "--chain needs ETH_RPC_URL, or RPC_URL in \$HARMONY_MIGRATION_REPO/airdrop/.env"
+fi
+
 work="$(mktemp -d)"
 trap 'owner_db_close; rm -rf "$work"' EXIT
 
@@ -74,6 +102,15 @@ owner_db_extract "$work"
 
 # Close our tunnel before printing so the report is the last thing on screen.
 owner_db_close
+
+if [ "$chain" = 1 ]; then
+  log "reading the reserve's transfers and vault deposits to these wallets from Ethereum"
+  read -r chain_block chain_host < <(ETH_RPC_URL="$rpc" python3 "$here/chain-deliveries.py" \
+    --confirmations "$work/confirmations.csv" --catalog "$catalog" --out "$work/deliveries.csv") \
+    || die "could not read Ethereum"
+  [ -n "${chain_block:-}" ] || die "could not read Ethereum"
+  extra+=(--deliveries "$work/deliveries.csv" --chain-source "Ethereum via $chain_host, up to block $chain_block")
+fi
 
 python3 "$here/confirmed-wallets.py" \
   --confirmations "$work/confirmations.csv" \

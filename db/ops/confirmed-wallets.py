@@ -9,7 +9,8 @@ exact decimal strings, truncated (never rounded) for display.
 
 Review state (approval decision, wallet part sent, vault shares sent per
 validator) is read from every row of confirm.reviews as review_tracks.py
-describes.
+describes. With --deliveries (db/ops/chain-deliveries.py), every part is also
+compared with what the reserve paid on Ethereum.
 """
 
 from __future__ import annotations
@@ -273,6 +274,29 @@ def index_exceptions(rows: Iterable[Dict[str, str]]):
     return wallet, vault
 
 
+class Paid:
+    """What Ethereum shows the reserve paid for one part (db/ops/chain-deliveries.py), against its mark.
+
+    `check` is empty when the chain and the mark agree, otherwise one of CHAIN_CHECKS."""
+
+    def __init__(self, expected: int, marked: bool, payments: List[Dict[str, str]]) -> None:
+        self.expected = expected
+        self.payments = payments
+        self.amount = sum(to_int(p.get("amount_atto")) for p in payments)
+        if self.amount == 0:
+            self.check = "marked, not on chain" if marked else ""
+        elif self.amount != expected:
+            self.check = "amount differs"
+        else:
+            self.check = "" if marked else "paid, not marked"
+
+    def txs(self) -> str:
+        return ", ".join(f"{p['tx_hash']} (block {to_int(p['block']):,})" for p in self.payments) or "-"
+
+
+CHAIN_CHECKS = ("paid, not marked", "marked, not on chain", "amount differs", "no position")
+
+
 class VaultPosition:
     def __init__(self, row: Dict[str, str], adjustments: Adjustments) -> None:
         self.address = row["address"].strip().lower()
@@ -294,6 +318,10 @@ class VaultPosition:
         else:
             self.status = "pending"
         self.sent: Optional[rt.Review] = None
+        self.chain: Optional[Paid] = None
+
+    def label(self) -> str:
+        return f"vault {self.validator_name or self.validator_address}"
 
     def block(self, reason: str) -> None:
         if self.status == "pending":
@@ -384,6 +412,9 @@ class Confirmation:
         self.decision = "none"
         self.decision_review: Optional[rt.Review] = None
         self.wallet_review: Optional[rt.Review] = None
+        # Set by apply_chain: the wallet part, and deposits into vaults the wallet has no position in.
+        self.chain_wallet: Optional[Paid] = None
+        self.chain_unplanned: Dict[str, Paid] = {}
         if not self.in_ledger:
             self.wallet_status = "unknown"
         elif self.wallet_allocation <= 0:
@@ -431,6 +462,27 @@ class Confirmation:
 
     def vault_pending_amount(self) -> int:
         return sum(v.expected_shares for v in self.live_vaults() if v.status == "pending")
+
+    def chain_problems(self) -> List[tuple]:
+        """(part, check, Paid, sent status) for every part whose Ethereum payments disagree with its mark."""
+        if self.chain_wallet is None:
+            return []
+        w = self.chain_wallet
+        out = [("wallet", w.check, w, self.wallet_status)] if w.check else []
+        out += [(v.label(), v.chain.check, v.chain, v.status) for v in self.vaults if v.chain and v.chain.check]
+        out += [(f"vault {validator}", "no position", paid, "-") for validator, paid in sorted(self.chain_unplanned.items())]
+        return out
+
+    def chain_text(self) -> str:
+        w = self.chain_wallet
+        wallet = f"wallet paid {format_one(w.amount)}" if w.amount else "wallet not paid"
+        owed = [v for v in self.vaults if v.expected_shares > 0]
+        credited = sum(1 for v in owed if v.chain and v.chain.amount)
+        text = f"{wallet} | vault {credited} of {len(owed)} credited" if owed else wallet
+        problems = self.chain_problems()
+        if problems:
+            text += " | CHECK " + "; ".join(f"{part}: {check}" for part, check, _, _ in problems)
+        return text
 
     def review_text(self) -> str:
         r = self.decision_review
@@ -570,6 +622,28 @@ def apply_reviews(items: List[Confirmation], state: rt.ReviewState) -> None:
                 v.status = "sent"
 
 
+def apply_chain(items: List[Confirmation], payment_rows: List[Dict[str, str]]) -> None:
+    """Compare every part with what the reserve paid on Ethereum. Run after apply_reviews."""
+    wallet: Dict[str, List[Dict[str, str]]] = defaultdict(list)
+    vault: Dict[tuple, List[Dict[str, str]]] = defaultdict(list)
+    for row in payment_rows:
+        address = row["address"].strip().lower()
+        if row.get("kind") == "wallet":
+            wallet[address].append(row)
+        elif row.get("kind") == "vault":
+            vault[(address, row["validator_address"].strip().lower())].append(row)
+    for c in items:
+        c.chain_wallet = Paid(c.wallet_allocation, c.wallet_status == "sent", wallet.get(c.address, []))
+        for v in c.vaults:
+            v.chain = Paid(v.expected_shares, v.status == "sent", vault.get((c.address, v.validator_address), []))
+        planned = {v.validator_address for v in c.vaults}
+        c.chain_unplanned = {
+            validator: Paid(0, False, rows)
+            for (address, validator), rows in vault.items()
+            if address == c.address and validator not in planned
+        }
+
+
 def select(
     items: List[Confirmation],
     decision: Optional[str] = None,
@@ -671,6 +745,15 @@ class Stats:
         )
         self.vault_ledger_mismatch = sum(1 for c in latest.values() if c.vault_ledger_mismatch)
 
+        # Only when apply_chain ran: what Ethereum shows paid, and where it disagrees with the marks.
+        self.chain_checked = any(c.chain_wallet is not None for c in latest.values())
+        self.chain_wallets = sum(1 for c in latest.values() if c.chain_wallet and c.chain_wallet.amount)
+        self.chain_wallet_amount = sum(c.chain_wallet.amount for c in latest.values() if c.chain_wallet)
+        credited = [v.chain for c in latest.values() for v in c.vaults if v.chain and v.chain.amount]
+        self.chain_positions = len(credited)
+        self.chain_position_amount = sum(p.amount for p in credited)
+        self.chain_problems = Counter(check for c in latest.values() for _, check, _, _ in c.chain_problems())
+
         self.unrecognised_reviews = len(state.unrecognised) if state else 0
         self.approvals_as_included = state.approvals_stored_as_included() if state else 0
 
@@ -703,6 +786,7 @@ def render_header(
     stats: Stats,
     filters: str = "",
     total_rows: Optional[int] = None,
+    chain_source: str = "",
 ) -> List[str]:
     local = generated.astimezone()
     lines = [
@@ -712,6 +796,8 @@ def render_header(
     ]
     if source:
         lines.append(f"  source       {source}")
+    if chain_source:
+        lines.append(f"  chain        {chain_source}")
     lines.append(f"  ledger       data_version {ledger_version or '<missing>'}")
     if stats.candidate_sets:
         for s in stats.candidate_sets:
@@ -739,6 +825,8 @@ def render_record(index: int, c: Confirmation) -> List[str]:
     lines.append(f"{pad}reason        {' | '.join(reason_bits)}")
     lines.append(f"{pad}id            {c.id}")
     lines.append(f"{pad}review        {c.review_text()}")
+    if c.chain_wallet is not None:
+        lines.append(f"{pad}chain         {c.chain_text()}")
     lines.append(f"{pad}versions      data {c.data_version} | policy {c.policy_version}")
 
     if not c.in_ledger:
@@ -831,6 +919,38 @@ def render_compact(items: List[Confirmation]) -> List[str]:
     return lines
 
 
+CHAIN_HINTS = {
+    "paid, not marked": "paid from the reserve but not marked sent: find its run, then record-review.sh --sent ... --from-run",
+    "marked, not on chain": "marked sent but no payment found: check the run's transaction, then record-review.sh --unsent",
+    "amount differs": "paid an amount other than the ledger's: compare the run's list with the ledger before marking",
+    "no position": "credited in a vault where the ledger has no position for this wallet",
+}
+
+
+def render_chain(items: List[Confirmation], source: str) -> List[str]:
+    """Every part whose Ethereum payments disagree with its mark, once per wallet."""
+    latest: Dict[str, Confirmation] = {}
+    for c in items:
+        latest[c.address] = c
+    rows = [(c, *problem) for c in latest.values() for problem in c.chain_problems()]
+    lines = [f"Chain check{f' ({source})' if source else ''}"]
+    if not rows:
+        lines.append("  every part marked sent was paid, and nothing unmarked was paid")
+        return lines
+    for c, part, check, paid, status in rows:
+        lines.append(
+            f"  {c.id:>6}  {c.address}  {part}: {check}; ledger {format_one(paid.expected)}, "
+            f"on chain {format_one(paid.amount)}, status {status}"
+        )
+        if paid.payments:
+            lines.append(f"          {paid.txs()}")
+    lines.append("")
+    for check in CHAIN_CHECKS:
+        if any(r[2] == check for r in rows):
+            lines.append(f"  {check}: {CHAIN_HINTS[check]}")
+    return lines
+
+
 def status_counts(counts: Counter, amounts: Counter, unit: str) -> str:
     parts = []
     for status in STATUS_ORDER:
@@ -893,6 +1013,14 @@ def render_stats(stats: Stats) -> List[str]:
             f"  ignored review rows     {stats.unrecognised_reviews:,} row(s) with a wallet:/vault: batch id or status "
             "that does not parse (see db/ops/review_tracks.py)"
         )
+    if stats.chain_checked:
+        lines.append(
+            f"  on chain                wallet paid {stats.chain_wallets:,} wallet{'s' if stats.chain_wallets != 1 else ''} "
+            f"({format_one(stats.chain_wallet_amount)} ONE) | vault credited {stats.chain_positions:,} "
+            f"position{'s' if stats.chain_positions != 1 else ''} ({format_one(stats.chain_position_amount)} ONE)"
+        )
+        problems = " | ".join(f"{check} {stats.chain_problems[check]:,}" for check in CHAIN_CHECKS if stats.chain_problems[check])
+        lines.append(f"  chain vs marks          {problems or 'agree'}")
     lines.append(f"  signer mismatch         {stats.signer_mismatch:,}")
     if stats.attested_by:
         lines.append(
@@ -978,6 +1106,9 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--exceptions", help="CSV extract of routing_exceptions for confirmed addresses")
     parser.add_argument("--candidates", help="CSV extract of confirm.candidates totals per version")
     parser.add_argument("--reviews", help="CSV extract of every confirm.reviews row, in (reviewed_at, id) order")
+    parser.add_argument("--deliveries", help="the reserve's payments on Ethereum, from db/ops/chain-deliveries.py; "
+                                             "compares every part with its sent mark")
+    parser.add_argument("--chain-source", default="", help="where --deliveries was read, for the header (no credentials)")
     parser.add_argument("--decision", choices=DECISIONS, help="only confirmations with this approval decision")
     parser.add_argument("--wallet", choices=WALLET_FILTERS,
                         help="only wallets whose wallet part is pending, sent, or blocked (not deliverable to the "
@@ -1012,13 +1143,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     everything = build(read_rows(args.confirmations), read_rows(args.vault_shares), read_rows(args.exceptions))
     state = rt.ReviewState(read_rows(args.reviews))
     apply_reviews(everything, state)
+    if args.deliveries:
+        apply_chain(everything, read_rows(args.deliveries))
     filters = filter_pairs(args)
     items = select(everything, args.decision, args.wallet, args.vault, args.run)
     stats = Stats(items, read_rows(args.candidates), state)
 
     out: List[str] = []
     filter_text = ", ".join(f"{name} {value}" for name, value in filters)
-    out.extend(render_header(generated, args.source, args.ledger_data_version, stats, filter_text, len(everything)))
+    out.extend(render_header(generated, args.source, args.ledger_data_version, stats, filter_text, len(everything),
+                             args.chain_source))
     out.append("")
     if not items:
         out.append("No confirmations match these filters." if filters and everything else "No confirmations recorded.")
@@ -1028,6 +1162,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         for index, c in enumerate(items, start=1):
             out.extend(render_record(index, c))
             out.append("")
+    if args.deliveries and items:
+        out.append("")
+        out.extend(render_chain(items, args.chain_source))
     out.append("")
     out.extend(render_stats(stats))
     if args.csv:
