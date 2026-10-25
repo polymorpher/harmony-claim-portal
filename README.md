@@ -82,6 +82,17 @@ Rate limit: 30 requests/minute per browser (client IP plus User-Agent) and
 the limit. 429 includes `Retry-After`. Helmet headers, `Cache-Control: no-store`.
 The confirmation process uses the same rule with its own lower per-browser cap.
 
+The lookup page shows what has been delivered without asking the API: the
+browser reads Ethereum for the reserve's ONE transfers to the wallet part's
+destination, and its `Deposit` events crediting each vault position's
+delegator in that validator's governor vault from the vault catalog. Each part
+shows its allocation, what was received, and the transaction and date; "Not
+sent yet" only when the read succeeded. Exchange wallets, which are paid
+separately, show nothing. A wallet that can confirm on `/confirm` shows when it
+confirmed instead of the button, from `GET /api/v1/confirmations/:address`.
+The endpoints are the `/vault` page's (`VITE_ETH_RPC_URLS`), so the looked-up
+address goes to them.
+
 `/confirm` is the only page that asks for a signature. It is for key-controlled
 wallets deferred because their last indexed activity is outside the six-month
 window, or because no activity was indexed. It records current control for a

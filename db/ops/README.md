@@ -252,6 +252,8 @@ db/ops/record-review.sh --unsent wallet --run confirmed-wallets-2 --note "tx 2 r
   any review row was added since the plan was made.
 - **It does not read the chain.** Run `--sent` after the transactions have
   executed and, for vaults, after `vault-batch reconcile` passed.
+  `confirmed-wallets.sh --chain` afterwards shows any part paid but not
+  marked, or marked but not paid.
 
 How the rows read back (`db/ops/review_tracks.py`): `batch_id`
 `wallet:<run>` is the wallet part, `vault:<run>:<validator>` the vault shares
@@ -260,6 +262,42 @@ Status `queued` on a decision means approved, `rejected` rejected; `included`
 on a wallet or vault row means sent, `queued` there means undone. The latest
 row of each kind wins. Rows that do not parse are counted in the report's
 summary and otherwise ignored, so write rows with this script, not by hand.
+
+## Checking the marks against Ethereum
+
+The marks are written by hand after each run, so they can fall behind the
+chain. `--chain` reads what the reserve actually paid each confirmed wallet and
+compares it with every part's mark:
+
+```sh
+db/ops/confirmed-wallets.sh --chain --decision approved --compact
+```
+
+`db/ops/chain-deliveries.py` reads, for every confirmed address, the ONE
+token transfers from the reserve to it and the reserve's `Deposit` events
+crediting it in a governor vault. Chain id, token, reserve and vault addresses
+come from the vault catalog (`frontend/public/vault-catalog.json`, or
+`--vault-catalog PATH`); deposit events from any other contract are ignored.
+The RPC is `ETH_RPC_URL` (environment or `.env`), else `RPC_URL` in
+`$HARMONY_MIGRATION_REPO/airdrop/.env` (default `~/git/harmony-migration`).
+Use the paid archive endpoint, not a public one. Only its host is printed.
+
+The header names the endpoint and block, each record gets a `chain` line, a
+"Chain check" section lists every part that disagrees, with its transactions,
+and the summary adds what was paid and `chain vs marks`:
+
+- `paid, not marked`: the reserve paid the ledger amount but the part is not
+  marked sent. Find the run that paid it and mark it with
+  `record-review.sh --sent`.
+- `marked, not on chain`: marked sent, but no payment was found. Check the
+  run's transaction; undo the mark with `record-review.sh --unsent` if it did
+  not execute.
+- `amount differs`: paid, but not the ledger amount. Compare the run's list
+  with the ledger before marking anything.
+- `no position`: credited in a vault where the ledger has no position for the
+  wallet.
+
+It reads the chain and nothing else: no row is written.
 
 ## Attested confirmations
 
