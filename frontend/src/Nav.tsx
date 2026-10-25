@@ -5,7 +5,7 @@ const PAGES = [
   { href: "/history", label: "Transaction history" },
 ] as const;
 
-export function Nav({ current }: { current: (typeof PAGES)[number]["href"] }) {
+export function Nav({ current }: { current: (typeof PAGES)[number]["href"] | null }) {
   return (
     <nav className="nav" aria-label="Pages">
       {PAGES.map((p) => (

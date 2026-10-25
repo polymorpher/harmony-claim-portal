@@ -41,6 +41,13 @@ a.button, a.button:visited {
 }
 a.button:hover { background: #ffffff; color: var(--bg); }
 .confirm-cta { margin: 0 0 16px; }
+.steps { padding-left: 22px; }
+.steps li { margin: 10px 0; }
+.steps code { word-break: break-all; }
+pre.cmd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; background: #0c1117;
+  border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; overflow-x: auto; margin: 8px 0 0;
+}
 .message {
   white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.85rem; background: #0c1117; border: 1px solid var(--border);
