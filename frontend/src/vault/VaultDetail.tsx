@@ -16,6 +16,28 @@ import type { VaultSigner } from "./useVaultSigner";
 import { VaultActions } from "./VaultActions";
 
 const ACTIVITY_PAGE = 20;
+const RECENT_CHANGES = 3;
+
+/** A change history, newest first: the latest few, and the rest on request. `changes` is oldest first. */
+function RecentChanges<T>({ title, changes, row }: { title: string; changes: T[]; row: (change: T) => ReactNode }) {
+  const [all, setAll] = useState(false);
+  const newest = [...changes].reverse();
+  return (
+    <div className="block">
+      <h3>{title}</h3>
+      <table>
+        <tbody>{(all ? newest : newest.slice(0, RECENT_CHANGES)).map(row)}</tbody>
+      </table>
+      {changes.length > RECENT_CHANGES && (
+        <p>
+          <button type="button" className="ghost" onClick={() => setAll(!all)}>
+            {all ? `Show the latest ${RECENT_CHANGES}` : `Show all ${changes.length} changes`}
+          </button>
+        </p>
+      )}
+    </div>
+  );
+}
 
 const same = (a: string | null | undefined, b: string | null | undefined) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
 
@@ -303,54 +325,48 @@ export function VaultDetail({
             )}
           </dl>
           {summary && summary.governorChanges.length > 1 && (
-            <div className="block">
-              <h3>Governor changes</h3>
-              <table>
-                <tbody>
-                  {summary.governorChanges.map((c) => (
-                    <tr key={`${c.transactionHash}-${c.next}`}>
-                      <td>
-                        <TxLink hash={c.transactionHash} chainId={chainId}>
-                          {when(times.data, c.blockNumber)}
-                        </TxLink>
-                      </td>
-                      <td>
-                        {c.previous === zeroAddress ? (
-                          <>Set at deployment to <AddressLink address={c.next} chainId={chainId} you={you} /></>
-                        ) : (
-                          <>
-                            <AddressLink address={c.previous} chainId={chainId} you={you} /> →{" "}
-                            <AddressLink address={c.next} chainId={chainId} you={you} />
-                          </>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <RecentChanges
+              title="Governor changes"
+              changes={summary.governorChanges}
+              row={(c) => (
+                <tr key={`${c.transactionHash}-${c.next}`}>
+                  <td>
+                    <TxLink hash={c.transactionHash} chainId={chainId}>
+                      {when(times.data, c.blockNumber)}
+                    </TxLink>
+                  </td>
+                  <td>
+                    {c.previous === zeroAddress ? (
+                      <>Set at deployment to <AddressLink address={c.next} chainId={chainId} you={you} /></>
+                    ) : (
+                      <>
+                        <AddressLink address={c.previous} chainId={chainId} you={you} /> →{" "}
+                        <AddressLink address={c.next} chainId={chainId} you={you} />
+                      </>
+                    )}
+                  </td>
+                </tr>
+              )}
+            />
           )}
           {summary && summary.feeChanges.length > 0 && (
-            <div className="block">
-              <h3>Fee changes</h3>
-              <table>
-                <tbody>
-                  {summary.feeChanges.map((c) => (
-                    <tr key={`${c.transactionHash}-${c.next}`}>
-                      <td>
-                        <TxLink hash={c.transactionHash} chainId={chainId}>
-                          {when(times.data, c.blockNumber)}
-                        </TxLink>
-                      </td>
-                      <td>
-                        {c.previous === 0 ? `Harmony commission (${commission}%)` : `${percentFromBps(c.previous)}%`} →{" "}
-                        {c.next === 0 ? `Harmony commission (${commission}%)` : `${percentFromBps(c.next)}%`}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <RecentChanges
+              title="Fee changes"
+              changes={summary.feeChanges}
+              row={(c) => (
+                <tr key={`${c.transactionHash}-${c.next}`}>
+                  <td>
+                    <TxLink hash={c.transactionHash} chainId={chainId}>
+                      {when(times.data, c.blockNumber)}
+                    </TxLink>
+                  </td>
+                  <td>
+                    {c.previous === 0 ? `Harmony commission (${commission}%)` : `${percentFromBps(c.previous)}%`} →{" "}
+                    {c.next === 0 ? `Harmony commission (${commission}%)` : `${percentFromBps(c.next)}%`}
+                  </td>
+                </tr>
+              )}
+            />
           )}
         </section>
       )}
