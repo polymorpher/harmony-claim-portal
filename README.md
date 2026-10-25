@@ -236,6 +236,26 @@ The lookup process uses the `claim_read` role. The confirmation process uses
 `claim_confirm` and cannot write the claim tables. The owner role used by
 migrations and the injector is not in either process. See `db/ops/README.md`.
 
+The Governor and fee section lists the latest three governor and fee changes,
+newest first, and the rest on request.
+
+## Harmony addresses on a Ledger (`/ledger`)
+
+A Ledger's Harmony apps can show a `44'/1023'` address on `/vault` but cannot
+send Ethereum transactions for it, and neither the ONE token nor the vaults
+accept anything but a transaction from the address. `/ledger`, linked from
+the vault page's view-only notices, explains this and how to recover the
+address's private key offline and import it into an Ethereum wallet.
+
+It links to `ledger-key-tool.html`, built from `frontend/ledger-key-tool.html`
+and `frontend/src/keytool/` by `vite.keytool.config.ts` as one self-contained
+file. Its Content-Security-Policy allows only its own inline script (by hash)
+and inline styles, so it can make no network request. It checks the BIP-39
+checksum and derives `m/44'/1023'/0'/0/N` with an optional passphrase
+(`src/keytool/derive.test.ts` has vectors from Foundry's `cast`). The build
+writes `ledger-key-tool.html.sha256` beside it, `/ledger` shows that hash, and
+a rebuild from the same source gives the same file.
+
 ## Development
 
 ```sh
