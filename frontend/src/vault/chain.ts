@@ -1,8 +1,8 @@
-import { createPublicClient, erc20Abi, fallback, http, type Address, type Chain, type PublicClient } from "viem";
+import { createPublicClient, erc20Abi, fallback, http, type Address, type Chain, type Hex, type PublicClient } from "viem";
 import { mainnet, sepolia } from "viem/chains";
-import { depositEvent, vaultAbi, vaultEvents } from "./abi";
+import { depositEvent, transferEvent, vaultAbi, vaultEvents } from "./abi";
 import type { VaultLog } from "./activity";
-import type { Catalog } from "./catalog";
+import { ONE_TOKEN_BLOCKS, type Catalog } from "./catalog";
 
 // Public endpoints that answer eth_getLogs from the browser. Tenderly's gateway serves full history over
 // wide ranges; dRPC's free tier caps a request at 10,000 blocks and publicnode only serves recent blocks,
@@ -177,6 +177,56 @@ export async function readFunding(client: PublicClient, vaults: Address[], reser
     out.set(vault, (out.get(vault) ?? 0n) + log.args.assets);
   }
   return out;
+}
+
+/** One payment by the reserve: an ERC-20 transfer to `recipient`, or a vault deposit (`address`) credited to it. */
+export interface ReservePayment {
+  address: Address;
+  recipient: Address;
+  amount: bigint;
+  blockNumber: bigint;
+  transactionHash: Hex;
+}
+
+async function split<T>(from: bigint, to: bigint, read: (from: bigint, to: bigint) => Promise<T[]>): Promise<T[]> {
+  try {
+    return await read(from, to);
+  } catch (err) {
+    if (to - from < MIN_LOG_SPAN) throw err;
+    const mid = from + (to - from) / 2n;
+    return [...(await split(from, mid, read)), ...(await split(mid + 1n, to, read))];
+  }
+}
+
+/**
+ * Every ERC-20 transfer from the reserve to `recipients`, and every deposit the reserve made into
+ * `vaults` for them as delegators, up to the latest block. Deposits in other contracts are not read.
+ */
+export async function readReservePayments(
+  client: PublicClient,
+  catalog: Catalog,
+  recipients: Address[],
+  vaults: Address[],
+): Promise<{ transfers: ReservePayment[]; deposits: ReservePayment[]; toBlock: bigint }> {
+  const toBlock = await client.getBlockNumber({ cacheTime: 0 });
+  const tokenFrom = BigInt(ONE_TOKEN_BLOCKS[catalog.chain_id] ?? catalog.start_block);
+  const [transfers, deposits] = await Promise.all([
+    recipients.length === 0
+      ? []
+      : split(tokenFrom, toBlock, (fromBlock, to) =>
+          client.getLogs({ address: catalog.token, event: transferEvent, args: { from: catalog.reserve, to: recipients }, fromBlock, toBlock: to, strict: true }),
+        ),
+    recipients.length === 0 || vaults.length === 0
+      ? []
+      : split(BigInt(catalog.start_block), toBlock, (fromBlock, to) =>
+          client.getLogs({ address: vaults, event: depositEvent, args: { caller: catalog.reserve, delegator: recipients }, fromBlock, toBlock: to, strict: true }),
+        ),
+  ]);
+  return {
+    transfers: transfers.map((l) => ({ address: l.address, recipient: l.args.to, amount: l.args.value, blockNumber: l.blockNumber, transactionHash: l.transactionHash })),
+    deposits: deposits.map((l) => ({ address: l.address, recipient: l.args.delegator, amount: l.args.assets, blockNumber: l.blockNumber, transactionHash: l.transactionHash })),
+    toBlock,
+  };
 }
 
 /** Every event the vault emitted since `fromBlock`, oldest first, and the block read up to. */

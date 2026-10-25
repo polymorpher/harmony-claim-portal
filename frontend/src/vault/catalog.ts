@@ -10,6 +10,11 @@ export const ONE_TOKENS: Record<number, Address> = {
   1: "0xFf74317E948695297acb79Cb2De06111F5Cc16b3",
   11155111: "0x6dF02e9a623f9d11d6c73B1fc2aBfAbb63f11E72",
 };
+/** Block each of those tokens was deployed in; the reserve paid nothing before it. */
+export const ONE_TOKEN_BLOCKS: Record<number, number> = {
+  1: 25_936_466,
+  11155111: 11_664_601,
+};
 
 export interface StageTotal {
   count: number;

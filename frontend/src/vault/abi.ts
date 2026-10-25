@@ -20,3 +20,5 @@ export const vaultAbi = parseAbi([
 export const vaultEvents = vaultAbi.filter((item) => item.type === "event");
 
 export const depositEvent = parseAbiItem("event Deposit(address indexed caller, address indexed delegator, uint256 assets)");
+
+export const transferEvent = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)");
