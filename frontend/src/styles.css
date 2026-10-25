@@ -147,6 +147,7 @@ tr.planned td { color: var(--muted); }
 .governor { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
 .ok-text { color: #5fd39c; }
 table.activity td:first-child { white-space: nowrap; font-size: 0.85rem; }
+table.delivery .payment { white-space: nowrap; }
 .dialog {
   max-width: 560px; width: calc(100% - 32px); padding: 22px 24px; border-radius: 12px;
   border: 1px solid var(--border); background: var(--card); color: var(--text);

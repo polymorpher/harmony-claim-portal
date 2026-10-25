@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import {
   claimCanRequestConfirmation,
   type Adjustment,
@@ -5,6 +6,8 @@ import {
   type ExchangeTreatment,
   type VaultPosition,
 } from "@hcp/shared";
+import { fetchConfirmation } from "./api";
+import { Delivery } from "./DeliveryBlock";
 import { formatUtc, one, shortAddress } from "./format";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -379,17 +382,37 @@ function Adjustments({ adjustments }: { adjustments: Adjustment[] }) {
   );
 }
 
+/** The confirm button, or when the wallet already confirmed, when it did. If the status cannot be read, the button. */
+function ConfirmActivity({ claim }: { claim: ClaimResponse }) {
+  const status = useQuery({
+    queryKey: ["confirmation", claim.address.hex],
+    queryFn: () => fetchConfirmation(claim.address.hex),
+    staleTime: 60_000,
+    retry: false,
+  });
+  if (status.isLoading) return null;
+  const recorded = status.data?.confirmation;
+  if (recorded) {
+    return (
+      <div className="banner ok">
+        <strong>Activity confirmed</strong> at {formatUtc(recorded.recorded_at)}. Nothing else is needed from this wallet.
+      </div>
+    );
+  }
+  return (
+    <div className="confirm-cta">
+      <a className="button" href="/confirm">Confirm you are still active</a>
+      <p className="small muted">Confirming shows this wallet is still in use, so it is not treated as dead.</p>
+    </div>
+  );
+}
+
 export function ClaimView({ claim }: { claim: ClaimResponse }) {
   const exchange = manualExchange(claim);
   return (
     <div className="claim">
       <Banner claim={claim} />
-      {claimCanRequestConfirmation(claim) && (
-        <div className="confirm-cta">
-          <a className="button" href="/confirm">Confirm you are still active</a>
-          <p className="small muted">Confirming shows this wallet is still in use, so it is not treated as dead.</p>
-        </div>
-      )}
+      {claimCanRequestConfirmation(claim) && <ConfirmActivity claim={claim} />}
       <AddressBlock claim={claim} />
       {claim.found && claim.eligibility && (
         <div className="summary">
@@ -422,6 +445,7 @@ export function ClaimView({ claim }: { claim: ClaimResponse }) {
           )}
         </div>
       )}
+      <Delivery claim={claim} />
       <Migration claim={claim} />
       <Wallet claim={claim} />
       <Vaults positions={claim.vault_positions} />
