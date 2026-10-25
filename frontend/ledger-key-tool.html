@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- content-security-policy -->
+    <meta name="referrer" content="no-referrer" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Harmony Ledger key recovery (offline)</title>
+    <style>
+      :root { color-scheme: dark; --bg: #0b0f14; --card: #121821; --border: #253041; --text: #e6edf3; --muted: #8b98a8; --ok: #1f8f5f; --warn: #b8862b; --bad: #e5534b; --accent: #4ea8de; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+      main { max-width: 860px; margin: 0 auto; padding: 24px 16px 48px; }
+      h1 { font-size: 1.5rem; margin: 0 0 8px; }
+      h2 { font-size: 1.15rem; margin: 0 0 10px; }
+      section, form { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin: 16px 0; }
+      label { display: block; color: var(--muted); font-size: 0.9rem; margin: 12px 0 6px; }
+      textarea, input { width: 100%; background: #0c1117; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 10px; font: 15px ui-monospace, SFMono-Regular, Menlo, monospace; }
+      button { background: var(--accent); color: #04121c; border: 0; border-radius: 6px; padding: 9px 14px; font-weight: 600; cursor: pointer; margin: 14px 8px 0 0; }
+      button.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+      button.small { margin: 4px 6px 0 0; padding: 4px 10px; font-size: 0.85rem; }
+      code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9rem; word-break: break-all; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+      th { color: var(--muted); font-weight: 500; font-size: 0.9rem; }
+      tr.match td { background: rgba(31, 143, 95, 0.15); }
+      .muted, .small { color: var(--muted); }
+      .small { font-size: 0.85rem; }
+      .banner { padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border); }
+      .banner.ok { border-color: var(--ok); background: rgba(31, 143, 95, 0.12); }
+      .banner.warn, section.warn { border-color: var(--warn); background: rgba(184, 134, 43, 0.12); }
+      .error { color: var(--bad); }
+      .key { display: block; margin-top: 6px; padding: 8px; border: 1px dashed var(--warn); border-radius: 6px; user-select: all; }
+      ul, ol { margin: 6px 0 0; padding-left: 22px; }
+      li { margin: 4px 0; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Recover the private key of a Harmony Ledger address</h1>
+      <p class="muted">
+        For an address on the Harmony path <code>m/44'/1023'/0'/0/N</code>, the path Ledger's Harmony apps use, when its
+        ONE or vault shares on Ethereum need a wallet that can sign Ethereum transactions. Everything happens in this file:
+        its security policy blocks every network request, so nothing you type can leave this computer through it.
+      </p>
+
+      <div id="network" class="banner"></div>
+
+      <section class="warn">
+        <strong>Before you type your recovery phrase</strong>
+        <ul>
+          <li>Anyone who learns the phrase controls everything on this Ledger, on every chain. Nobody from Harmony or the migration portal will ever ask for it.</li>
+          <li>Use a computer you trust. Disconnect it from the internet (turn off Wi-Fi, unplug the network cable) and close other programs.</li>
+          <li>A phrase typed into a computer is no longer only on the Ledger. After you move these funds, move everything else on this Ledger to a new recovery phrase.</li>
+        </ul>
+      </section>
+
+      <form id="form" autocomplete="off">
+        <label for="phrase">Recovery phrase: the 12, 18 or 24 words, in order, separated by spaces</label>
+        <textarea id="phrase" rows="3" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+        <label for="passphrase">Passphrase: only if you set one on the Ledger, exactly as set. Leave empty otherwise.</label>
+        <input id="passphrase" type="password" spellcheck="false" autocapitalize="off" autocomplete="off" />
+        <label for="target">Your Harmony address, 0x… or one1… (optional): finds it among the first 100 addresses</label>
+        <input id="target" spellcheck="false" autocapitalize="off" autocomplete="off" />
+        <button type="submit">Show addresses</button>
+        <button type="button" id="clear" class="ghost">Clear everything</button>
+      </form>
+
+      <p id="error" class="error" hidden></p>
+
+      <section id="results" hidden>
+        <h2>Addresses of this recovery phrase</h2>
+        <p class="small">
+          Find the address you use with the Ledger; the older Harmony app always uses #0. Show its private key only when you
+          are ready to import it. If none matches, check the words and the passphrase: a different passphrase gives
+          entirely different addresses.
+        </p>
+        <table>
+          <thead>
+            <tr><th>#</th><th>Address</th><th>Private key</th></tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <button type="button" id="more" class="ghost">Show 10 more</button>
+      </section>
+
+      <section>
+        <h2>After you have the key</h2>
+        <ol>
+          <li>Import it into an Ethereum wallet on the computer you will use. In MetaMask, open the account menu, choose to add or import an account, pick <em>Private key</em> and paste it. The new account shows the same 0x address as above.</li>
+          <li>On <strong>migrate.country/vault</strong>, connect that wallet to withdraw vault shares, and send the ONE to an address you control, for example an account of the Ethereum app on your Ledger.</li>
+          <li>Close this file. If you copied the key, clear your clipboard; clipboard history and sync may keep it.</li>
+        </ol>
+        <p class="small">
+          The key is derived with BIP-39 and BIP-32, the same standard the Ledger uses. Compare this file's SHA-256 with the
+          one published on migrate.country/ledger before using it.
+        </p>
+      </section>
+    </main>
+    <script type="module" src="/src/keytool/main.ts"></script>
+  </body>
+</html>
