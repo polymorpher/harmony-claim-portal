@@ -13,7 +13,7 @@ async function toolHash(): Promise<string | null> {
   return /^[0-9a-f]{64}$/.test(hash) ? hash : null;
 }
 
-/** What a holder can do when the address they use with a Ledger's Harmony app cannot sign on Ethereum. */
+/** What a holder can do when the address they use with a Ledger's Harmony app, or another wallet on Harmony's path, cannot sign on Ethereum. */
 export function LedgerPage() {
   const hash = useQuery({ queryKey: ["key-tool-hash"], queryFn: toolHash, staleTime: Infinity, retry: 1 });
   useEffect(() => {
@@ -28,7 +28,8 @@ export function LedgerPage() {
           <h1>Harmony addresses on a Ledger</h1>
           <p className="sub">
             Your ONE and vault shares on Ethereum are at the same address you used on Harmony. If that address is on a
-            Ledger's Harmony app, the Ledger can show it but cannot move what it holds on Ethereum.
+            Ledger's Harmony app, the Ledger can show it but cannot move what it holds on Ethereum. Other wallets that keep
+            Harmony addresses on Harmony's path can have the same problem.
           </p>
         </div>
       </header>
@@ -57,26 +58,46 @@ export function LedgerPage() {
       </section>
 
       <section className="card">
+        <h2>Other wallets on Harmony's path</h2>
+        <p>
+          Some other wallets, hardware wallets among them, also keep Harmony addresses on <code>m/44'/1023'/0'/0/N</code>{" "}
+          and Ethereum addresses on Ethereum's path. Such a wallet may give this site only its Ethereum address, and on
+          Ethereum it signs with that address, not the Harmony one. Try these first:
+        </p>
+        <ul className="notes">
+          <li>
+            Connect over WalletConnect and choose the Harmony address if the wallet shares it. If it does not, select the
+            Harmony network or the Harmony account in the wallet, then disconnect and connect again.
+          </li>
+          <li>Ask the wallet's support whether it can sign on Ethereum for the Harmony address.</li>
+        </ul>
+        <p>
+          The key tool below also works for these wallets if they use a standard 12- or 24-word recovery phrase (BIP-39)
+          on that path, but only use it once everything else has failed.
+        </p>
+      </section>
+
+      <section className="card">
         <h2>What you can do</h2>
         <p>
-          Recover the address's private key from the Ledger's recovery phrase, on a computer that is offline, and import it
-          into an Ethereum wallet such as MetaMask. That wallet can then withdraw your vault shares, send your ONE to an
-          address you control (for example an account of the Ethereum app on the same Ledger), and, if you are a vault's
-          governor, hand the governor role to that address.
+          <strong>Only if all else fails</strong>, recover the address's private key from the recovery phrase, on a computer
+          that is offline, and import it into an Ethereum wallet such as MetaMask. That wallet can then confirm activity,
+          withdraw your vault shares, send your ONE to an address you control (for example an account of the Ethereum app on
+          the same Ledger), and, if you are a vault's governor, hand the governor role to that address.
         </p>
         <div className="banner warn">
-          <strong>The recovery phrase controls everything on this Ledger, on every network.</strong> Never type it into a
+          <strong>The recovery phrase controls everything in the wallet, on every network.</strong> Never type it into a
           website, a chat or an email, and never give it to anyone: nobody from Harmony or this portal will ask for it. Type
           it only into an offline tool on a computer you trust. Once it has been typed into a computer, treat it as exposed:
-          after moving these funds, move everything else on the Ledger to a new recovery phrase.
+          after moving these funds, move everything else in the wallet to a new recovery phrase.
         </div>
       </section>
 
       <section className="card">
         <h2>Our offline key tool</h2>
         <p>
-          A single HTML file that derives the keys of Harmony Ledger addresses from the recovery phrase and, if you set one,
-          the Ledger passphrase. It runs entirely in your browser. Its security policy blocks every network request, so it
+          A single HTML file that derives the keys of addresses on Harmony's path from the recovery phrase and, if you set
+          one, the wallet's passphrase. It runs entirely in your browser. Its security policy blocks every network request, so it
           cannot send anything anywhere, even if the computer is online.
         </p>
         <ol className="steps">
