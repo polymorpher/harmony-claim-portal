@@ -3,7 +3,9 @@
 Claim lookup portal for the Harmony to Ethereum ERC-20 migration: a
 PostgreSQL database holding per-wallet cutoff claims and routing decisions, a
 rate-limited single-address lookup API, a wallet-connect frontend at
-`https://migrate.country`, and the GCP and Cloudflare scripts that deploy them.
+`https://migrate.country` (including `/bridge`, which claims the LayerZero
+bridge collateral on five chains), and the GCP and Cloudflare scripts that
+deploy them.
 
 ## Layout
 
@@ -24,9 +26,9 @@ db/migrations/010_tx_archive_calldata.sql   calldata and function names for the 
 db/migrations/011_vault_metadata.sql   governor vault display names (schema vault)
 db/ops/                        role split, candidate load, confirmed-wallets report, export, review, backup (see db/ops/README.md)
 db/seed/reason_texts.json      reason_code -> user-facing title/text (+ apply-reason-texts.sh)
-injector/                      Python loaders: harmony-migration CSVs -> Postgres (COPY + atomic swap) for claims and the transaction archive; vault catalog builder
+injector/                      Python loaders: harmony-migration CSVs -> Postgres (COPY + atomic swap) for claims and the transaction archive; vault catalog builder; bridge claim proof files
 backend/                       lookup API, confirmation API, and the proxy in front of them
-frontend/                      Vite + React + wagmi/viem UI, deploy script
+frontend/                      Vite + React + wagmi/viem UI, deploy scripts (site, bridge claim proofs)
 shared/                        @hcp/shared: API types, BigInt atto formatting, one1 bech32
 scripts/dev-postgres.sh        user-owned local PostgreSQL 18 for development
 ```
@@ -103,7 +105,9 @@ wallet is promoted.
 Ways to sign:
 
 - Browser wallet (MetaMask and other extensions, including MetaMask with a Ledger): `personal_sign`.
-- WalletConnect: phone wallets and Ledger Wallet (formerly Ledger Live), `personal_sign`. Needs `VITE_WALLETCONNECT_PROJECT_ID`. Harmony (`eip155:1666600000`) is requested as an optional chain next to Ethereum mainnet. Ledger Wallet only holds Ethereum-app accounts (`44'/60'`).
+- WalletConnect: phone wallets, hardware wallet apps, and Ledger Wallet (formerly Ledger Live), `personal_sign`. Needs `VITE_WALLETCONNECT_PROJECT_ID`. Harmony (`eip155:1666600000`) is requested as an optional chain next to Ethereum mainnet. Ledger Wallet only holds Ethereum-app accounts (`44'/60'`).
+  - WalletConnect has no way for a page to ask for a derivation path; the wallet picks the key behind each chain's account. A wallet that keeps Harmony addresses on Harmony's path (`44'/1023'`) can share one for Harmony and a different `44'/60'` one for Ethereum. wagmi only exposes the accounts of the session's current chain, so `frontend/src/useWallet.ts` reads every `eip155` account in the session, defaults to the first one shared on Harmony, lets the user pick another (`WalletAccounts`), and sends `personal_sign` on a chain the session shares the chosen address on. The signature must recover to that address before it is submitted.
+  - An address the wallet does not share at all cannot be used over WalletConnect. When a connected browser wallet or WalletConnect address is not eligible and has no claim (`found: false`), the confirm page suggests choosing the Harmony address, or selecting the Harmony network or account in the wallet and reconnecting. Only as a last resort does it point to the offline key tool on `/ledger`, with the warning that the recovery phrase is then exposed.
 - Ledger over USB (WebHID, Chrome, Edge, or Brave on a computer), talking to the device directly:
   - 2025 Harmony app (Ledger's Ethereum-app build for Harmony, `44'/1023'/0'/0/N`): `personal_sign`, shown on the device.
   - Ethereum app (`44'/60'`, Ledger Wallet, MetaMask, and legacy MyEtherWallet paths): `personal_sign`.
@@ -207,7 +211,10 @@ Blind signing on). The two Harmony Ledger apps connect but cannot send: the
 2025 app is Ledger's Ethereum app built for chain 1666600000 and refuses any
 other chain ID, and the older app only signs Harmony transactions. Neither has
 the Ethereum app's paths, so an address on `44'/1023'` cannot sign Ethereum
-transactions from a Ledger; the page shows it view-only.
+transactions from a Ledger; the page shows it view-only. Likewise an address a
+WalletConnect session shares only for Harmony is view-only on Ethereum: the
+wallet would sign there with its Ethereum account. It can still sign the
+vault-name message.
 
 Build the catalog from a harmony-migration checkout before deploying the
 frontend (it needs the Harmony archive RPC for names and commissions):
@@ -245,7 +252,10 @@ A Ledger's Harmony apps can show a `44'/1023'` address on `/vault` but cannot
 send Ethereum transactions for it, and neither the ONE token nor the vaults
 accept anything but a transaction from the address. `/ledger`, linked from
 the vault page's view-only notices, explains this and how to recover the
-address's private key offline and import it into an Ethereum wallet.
+address's private key offline and import it into an Ethereum wallet. It also
+covers other wallets that keep Harmony addresses on `44'/1023'` and give sites
+only their Ethereum address, and it presents key recovery as the last resort.
+The confirm page links there in its no-claim hint.
 
 It links to `ledger-key-tool.html`, built from `frontend/ledger-key-tool.html`
 and `frontend/src/keytool/` by `vite.keytool.config.ts` as one self-contained
@@ -255,6 +265,98 @@ checksum and derives `m/44'/1023'/0'/0/N` with an optional passphrase
 (`src/keytool/derive.test.ts` has vectors from Foundry's `cast`). The build
 writes `ledger-key-tool.html.sha256` beside it, `/ledger` shows that hash, and
 a rebuild from the same source gives the same file.
+
+## Bridge claims (`/bridge`)
+
+The LayerZero bridge collateral is paid by one immutable `BridgeClaims`
+contract per chain (harmony-migration `bridge-claims/`) on Ethereum, BNB Chain,
+Arbitrum, Base, and Linea. Each contract pays a fixed list from the custody Safe's
+approvals, once per row and always to the row's address, and anyone may
+submit a row. `/bridge?address=<0x… or one1…>` shows an address's rows on
+every chain and claims them. It needs no API and stores nothing. Until claims
+open, its "Bridge claims" tab is unlisted: it shows only on `/bridge`, so no
+other page links there. Remove `unlisted` from its entry in
+`frontend/src/Nav.tsx` to list it.
+
+- The page trusts only `frontend/src/bridge/deployments.json`: each contract's
+  chain, address, root, row count, list hash, runtime code hash, and assets.
+  `src/bridge/bridge.test.ts` pins the addresses, roots, and code hashes to the
+  audit's deployment commitments, so a regenerated file for another run fails
+  the tests until they are updated with it.
+- It loads the address's rows and proofs from one file in the public claims
+  bucket, `<run>/proofs/<first four hex digits>.json`. It refuses the file
+  unless every row names a listed asset and its proof leads to that
+  contract's root. A wrong file can only leave rows out, and the contract
+  pays the row's address whatever the page sends.
+- On each chain it checks that the contract's runtime code hashes to the
+  recorded value (the code embeds all six immutables), then reads `isClaimed`
+  and `available` in one multicall. A row is "Ready" when the custody Safe's
+  approval and balance cover it, and "Not open yet" before that.
+- "Claim N assets on <chain>" simulates `claimMany` with every payable row,
+  then sends it from the connected wallet (which is asked to switch networks)
+  or a Ledger's Ethereum app over USB. Rows not open yet are left out, since
+  one failed transfer would revert the batch. The sender pays the fee and need
+  not be the payee, so another wallet can claim for a Harmony Ledger address.
+
+Reads use `VITE_ETH_RPC_URLS` for Ethereum and `VITE_BSC_RPC_URLS`,
+`VITE_ARBITRUM_RPC_URLS`, `VITE_BASE_RPC_URLS`, and `VITE_LINEA_RPC_URLS` for
+the other chains. Empty values select public endpoints that allow browser
+requests.
+
+To publish a run's claims once its contracts are deployed:
+
+```sh
+R=~/git/harmony-migration/bridge-claims/runs/bridge-allocations-20261029
+injector/.venv/bin/python injector/build_bridge_proofs.py build \
+  --claims-dir $R --deploy-record $R/deploy-20261029T081859Z/deployments.json \
+  --allocations-dir ~/git/harmony-migration/artifacts/bridge-allocations-20261018/allocations-20261028
+pnpm --filter @hcp/frontend test           # deployments.json still names the audited contracts
+frontend/deploy/publish-bridge-proofs.sh   # proofs/ beside the run in the public bucket, then an anonymous check
+frontend/deploy/deploy-frontend.sh         # the page with that deployments.json
+```
+
+`build` refuses the run unless:
+
+- every file in the run's public `SHA256SUMS` hashes the same locally;
+- each manifest agrees with `summary.json`;
+- every row of `claims.csv` is well formed, sorted, and adds up to its
+  asset's total;
+- the tree rebuilt from the rows has the manifest's root and tree-file hash,
+  and gives the proofs in `samples.json`;
+- the deployment record shows each contract at its address with the expected
+  runtime code and immutables;
+- the allocation summary is the one the claim run records, and the snapshot
+  plan and bridge state beside it are the ones that summary records, with
+  every asset's pools on a recorded snapshot block.
+
+From the last two it also records, for the page's explanation of amounts,
+every chain's block at the cutoff, before Harmony's August 2026 rollback, and
+where escrows were read, and which holders and moment each asset's rows
+start from.
+
+It writes `deployments.json`, which holds no address-level data and is
+committed. It also writes 65,536 proof files with `index.json`, `README.md`,
+and `SHA256SUMS` under `injector/out/bridge-proofs/<run>/proofs/`, which is
+ignored. The files total 1.3 GB, about 18 KB each, and are uploaded
+gzip-encoded. With pycryptodome (the injector venv) a build takes about 20
+seconds. `verify-published` repeats the anonymous check of the bucket
+against the local build.
+
+A fork test claims one payee's rows with the page's own code after approving
+them from the impersonated custody Safe, and checks the payee's balances. It
+is skipped unless a fork is given:
+
+```sh
+anvil --fork-url "$BSC_RPC" --port 8545
+BRIDGE_FORK_LABEL=bsc BRIDGE_FORK_RPC_URL=http://127.0.0.1:8545 \
+  BRIDGE_FORK_PROOFS=$PWD/injector/out/bridge-proofs/<run>/proofs \
+  pnpm --filter @hcp/frontend exec vitest run src/bridge/fork.test.ts   # BRIDGE_FORK_PAYEE=0x… picks the payee
+```
+
+During development the page reads the published proofs. Before a run is
+published, set `VITE_BRIDGE_PROOFS_URL` to a server for the local
+`proofs/` folder that sends `Access-Control-Allow-Origin`.
+`deploy-frontend.sh` refuses to build while it is set.
 
 ## Development
 
@@ -288,8 +390,8 @@ psql "$(grep '^DATABASE_URL=' backend/.env.owner | cut -d= -f2-)" -v ON_ERROR_ST
 
 # checks
 pnpm --filter @hcp/backend test                                        # unit + http tests
-pnpm --filter @hcp/frontend test                                       # Ledger framing and signing against emulated apps, vault logic
-pnpm test:ops                                                          # candidate selection, review, vault catalog
+pnpm --filter @hcp/frontend test                                       # Ledger framing and signing against emulated apps, vault and bridge logic
+pnpm test:ops                                                          # candidate selection, review, vault catalog, bridge proofs
 TEST_DATABASE_URL="$(scripts/dev-postgres.sh url claims)" pnpm --filter @hcp/backend test   # + integration (claims and archive fixtures)
 pnpm build                                                             # shared, backend, frontend
 pnpm shellcheck
@@ -312,7 +414,8 @@ All scripts are idempotent bash over `gcloud`/`curl`; re-running is safe.
 3. Application:
    1. `backend/deploy/deploy-backend.sh` - builds locally, uploads over IAP, applies pending `db/migrations/*.sql`, seeds reason texts, runs `db/ops/setup-roles.sh --vm`, installs the lookup, confirmation, and proxy units, restarts, health-checks. When `VAULT_ETH_RPC_URLS` is set, it is written into the confirm process env so a governor can change a vault's name.
    2. `python3 injector/build_vault_catalog.py --migration-repo ~/git/harmony-migration --portal-export <approved vault-shares export>` - writes `frontend/public/vault-catalog.json` for `/vault`. It lists every planned vault, so new deployments and fundings need no rerun; rerun when the migration's vault inputs change or after approving more confirmations. After governors.country renews agreements, `--agreements-only` re-reads just the agreement ids and their status into the existing catalog.
-   3. `frontend/deploy/deploy-frontend.sh` - builds, `gcloud storage rsync` to the bucket, cache headers, CDN invalidation.
+   3. For `/bridge`, once per claim run: `injector/build_bridge_proofs.py build` and `frontend/deploy/publish-bridge-proofs.sh` (see "Bridge claims").
+   4. `frontend/deploy/deploy-frontend.sh` - builds, `gcloud storage rsync` to the bucket, cache headers, CDN invalidation.
 4. Data:
    - Until the embargo is lifted, load only synthetic data on the public VM:
      `backend/deploy/tunnel-db.sh` (keep open), then
