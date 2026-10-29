@@ -1,0 +1,770 @@
+{
+  "format": "bridge-deployments/v1",
+  "run": "bridge-allocations-20261029",
+  "published_url": "https://storage.googleapis.com/harmony-bridge-claims/bridge-allocations-20261029",
+  "published_index_sha256": "718c44d94c5105b5e36603c226ce46f1231d6368d96b2ac59c573d8a72cc46fb",
+  "proof_prefix_digits": 4,
+  "snapshots": {
+    "blocks": {
+      "arbitrum": {
+        "cutoff": {
+          "number": 503730748,
+          "time": "2026-09-10T14:00:00Z"
+        },
+        "rollback": {
+          "number": 493579427,
+          "time": "2026-08-11T23:25:37Z"
+        },
+        "state": {
+          "number": 516244640,
+          "time": "2026-10-19T09:26:00Z"
+        }
+      },
+      "base": {
+        "cutoff": {
+          "number": 51129726,
+          "time": "2026-09-10T13:59:59Z"
+        },
+        "rollback": {
+          "number": 49850695,
+          "time": "2026-08-11T23:25:37Z"
+        },
+        "state": {
+          "number": 52806307,
+          "time": "2026-10-19T09:26:01Z"
+        }
+      },
+      "bsc": {
+        "cutoff": {
+          "number": 121082318,
+          "time": "2026-09-10T14:00:00Z"
+        },
+        "rollback": {
+          "number": 115400306,
+          "time": "2026-08-11T23:25:37Z"
+        },
+        "state": {
+          "number": 128529933,
+          "time": "2026-10-19T09:25:59Z"
+        }
+      },
+      "ethereum": {
+        "cutoff": {
+          "number": 25947445,
+          "time": "2026-09-10T13:59:59Z"
+        },
+        "rollback": {
+          "number": 25735028,
+          "time": "2026-08-11T23:25:35Z"
+        },
+        "state": {
+          "number": 26225714,
+          "time": "2026-10-19T09:25:47Z"
+        }
+      },
+      "harmony": {
+        "cutoff": {
+          "number": 93623067,
+          "time": "2026-09-10T14:00:00Z"
+        },
+        "rollback": {
+          "number": 92730034,
+          "time": "2026-08-11T23:25:37Z"
+        }
+      },
+      "linea": {
+        "cutoff": {
+          "number": 31992810,
+          "time": "2026-09-10T14:00:00Z"
+        },
+        "rollback": {
+          "number": 31692004,
+          "time": "2026-08-11T23:25:35Z"
+        },
+        "state": {
+          "number": 32364842,
+          "time": "2026-10-19T09:25:50Z"
+        }
+      }
+    },
+    "orphaned_one_deliveries": {
+      "bsc": 19,
+      "ethereum": 9
+    }
+  },
+  "contracts": [
+    {
+      "label": "ethereum",
+      "chain_id": 1,
+      "address": "0xcc0407394a4d7Eb59F894aBbb9c005631183d49a",
+      "funder": "0x19565F4771843467aAD632d6B56c75396785b06C",
+      "wrapped_native": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+      "root": "0x964894effbc2fcaa5e87b9583ae6636959dd23fc1d4f2c3cd97db12d52f2523b",
+      "claim_count": 187005,
+      "list_sha256": "a932076291d645a03f9e67511ae64632c394c2d21afc9cc1093bbc7fe6af9707",
+      "manifest_sha256": "09f57711875d598b3b1f334ea46e4323ee07858b75521bebe8a2189ad54b9fee",
+      "runtime_keccak256": "0xed9957a85f2ff3d089aa2f5cd760ce4afbdb1743b3d66770caeddfda26bdd2d3",
+      "deploy_tx": "0x5a4429699c9879be366073539fb59be9eef44d211ce795f5936494398c5d620e",
+      "deploy_block": 26297171,
+      "assets": [
+        {
+          "token": "0x0000000000000000000000000000000000000000",
+          "symbol": "ETH",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-eth",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x111111111117dC0aa78b770fA6A738034120C302",
+          "symbol": "1INCH",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-1inch",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x5ba19d656B65f1684cFea4Af428C23B9f3628F97",
+          "symbol": "AAG",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-aag",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9",
+          "symbol": "AAVE",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-aave",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0xBB0E17EF65F82Ab018d8EDd776e8DD940327B28b",
+          "symbol": "AXS",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-axs",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0xba100000625a3754423978a60c9317c58a424e3D",
+          "symbol": "BAL",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-bal",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x4Fabb145d64652a948d72533023f6E7A623C7C53",
+          "symbol": "BUSD",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-busd",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0xD533a949740bb3306d119CC777fa900bA034cd52",
+          "symbol": "CRV",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-crv",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+          "symbol": "DAI",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-dai",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x3aFfCCa64c2A6f4e3B6Bd9c64CD2C969EFd1ECBe",
+          "symbol": "DSLA",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-dsla",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x853d955aCEf822Db058eb8505911ED77F175b99e",
+          "symbol": "FRAX",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-frax",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x4E15361FD6b4BB609Fa63C81A2be19d873717870",
+          "symbol": "FTM",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-ftm",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x3432B6A60D23Ca0dFCa7761B7ab56459D9C964D0",
+          "symbol": "FXS",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-fxs",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x514910771AF9Ca656af840dff83E8264EcF986CA",
+          "symbol": "LINK",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-link",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x7D1AfA7B718fb893dB30A3aBc0Cfc608AaCfeBB0",
+          "symbol": "MATIC",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-matic",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0xFf74317E948695297acb79Cb2De06111F5Cc16b3",
+          "symbol": "ONE",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "bsc-one",
+              "holders": "bsc",
+              "snapshot": "rollback"
+            },
+            {
+              "id": "ethereum-one",
+              "holders": "ethereum",
+              "snapshot": "rollback"
+            }
+          ]
+        },
+        {
+          "token": "0x45804880De22913dAFE09f4980848ECE6EcbAf78",
+          "symbol": "PAXG",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-paxg",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x83F20F44975D03b1b09e64809B757c47f942BEeA",
+          "symbol": "sDAI",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-sdai",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x0563DCe613D559a47877fFD1593549fb9d3510D6",
+          "symbol": "SUPERBID",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-superbid",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x6B3595068778DD592e39A122f4f5a5cF09C90fE2",
+          "symbol": "SUSHI",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-sushi",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984",
+          "symbol": "UNI",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-uni",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+          "symbol": "USDC",
+          "decimals": 6,
+          "pools": [
+            {
+              "id": "ethereum-usdc",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+          "symbol": "USDT",
+          "decimals": 6,
+          "pools": [
+            {
+              "id": "ethereum-usdt",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",
+          "symbol": "WBTC",
+          "decimals": 8,
+          "pools": [
+            {
+              "id": "ethereum-wbtc",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x66a0f676479Cee1d7373f3DC2e2952778BfF5bd6",
+          "symbol": "WISE",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-wise",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x8798249c2E607446EfB7Ad49eC89dD1865Ff4272",
+          "symbol": "xSUSHI",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-xsushi",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x25f8087EAD173b73D6e8B84329989A8eEA16CF73",
+          "symbol": "YGG",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "ethereum-ygg",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "label": "bsc",
+      "chain_id": 56,
+      "address": "0xaFFa52187721fb4165071349bbD8c55C8d4356FC",
+      "funder": "0x19565F4771843467aAD632d6B56c75396785b06C",
+      "wrapped_native": "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
+      "root": "0x734794900e6066eac22a05de2031fa848fcf59ac6f8da10fac1de211bb9c81c4",
+      "claim_count": 620276,
+      "list_sha256": "370c274681f08ab5b16d8bc697944e0a03d3ea35672e9aa793e9db5eaa768b8f",
+      "manifest_sha256": "9284c27532202a576f9acb7e7d8ab581e78e583fa2941cc5771b3e789ce7fdd3",
+      "runtime_keccak256": "0xdb4763abb510a261308e26bd3a80e5fa1d32b6f9eabcb08e011858d4311ffc93",
+      "deploy_tx": "0xa17a86c060f1471c3515c4cfd262185349744aa7bba73a13f15456a85fecccb1",
+      "deploy_block": 130440386,
+      "assets": [
+        {
+          "token": "0x0000000000000000000000000000000000000000",
+          "symbol": "BNB",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "bsc-bnb",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x3EE2200Efb3400fAbB9AacF31297cBdD1d435D47",
+          "symbol": "ADA",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "bsc-ada",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x0Eb3a705fc54725037CC9e008bDede697f62F335",
+          "symbol": "ATOM",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "bsc-atom",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56",
+          "symbol": "BUSD",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "bsc-busd",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82",
+          "symbol": "CAKE",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "bsc-cake",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x1AF3F329e8BE154074D8769D1FFa4eE058B1DBc3",
+          "symbol": "DAI",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "bsc-dai",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0xbA2aE424d960c26247Dd6c32edC70B295c744C43",
+          "symbol": "DOGE",
+          "decimals": 8,
+          "pools": [
+            {
+              "id": "bsc-doge",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x7083609fCE4d1d8Dc0C979AAb8c869Ea2C873402",
+          "symbol": "DOT",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "bsc-dot",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x2170Ed0880ac9A755fd29B2688956BD959F933F8",
+          "symbol": "ETH",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "bsc-eth",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0xCC42724C6683B7E57334c4E856f4c9965ED682bD",
+          "symbol": "MATIC",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "bsc-matic",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
+          "symbol": "USDC",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "bsc-usdc",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x55d398326f99059fF775485246999027B3197955",
+          "symbol": "USDT",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "bsc-usdt",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0xB2AA453B56b495cb95BC9fa72E7706B84e41EE54",
+          "symbol": "WND",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "bsc-wnd",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0xcF6BB5389c92Bdda8a3747Ddb454cB7a64626C63",
+          "symbol": "XVS",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "bsc-xvs",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0xb86AbCb37C3A4B64f74f59301AFF131a1BEcC787",
+          "symbol": "ZIL",
+          "decimals": 12,
+          "pools": [
+            {
+              "id": "bsc-zil",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "label": "arbitrum",
+      "chain_id": 42161,
+      "address": "0x2cf2aFD2b8Be95f9bA5E8A6B021e7895d6729469",
+      "funder": "0x19565F4771843467aAD632d6B56c75396785b06C",
+      "wrapped_native": null,
+      "root": "0x39e92752231cebd64190cb5cf44e63ae75d38a1d42b63b85c3dbae48ae1037df",
+      "claim_count": 27839,
+      "list_sha256": "63bcab8c72823df0ef275f6cac7ae02e7a1c8ef8d937a0d2a78048ae4f54f0d1",
+      "manifest_sha256": "e799b90745e97fb3803af342d3292772cfb059d7315e6a32a617500b4dce4861",
+      "runtime_keccak256": "0xccde05f46873541165bd89c0c6fd06c2cb00a13b5ddb3423a5acbc1f198ba0b9",
+      "deploy_tx": "0x4c4c7421923392df13b72277cf767cf3f94126b0a4961f2c3c119c4c5cefc790",
+      "deploy_block": 519304203,
+      "assets": [
+        {
+          "token": "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1",
+          "symbol": "DAI",
+          "decimals": 18,
+          "pools": [
+            {
+              "id": "arbitrum-dai",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8",
+          "symbol": "USDC",
+          "decimals": 6,
+          "pools": [
+            {
+              "id": "arbitrum-usdc",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
+          "symbol": "USDT",
+          "decimals": 6,
+          "pools": [
+            {
+              "id": "arbitrum-usdt",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "label": "base",
+      "chain_id": 8453,
+      "address": "0xA2BDdF296A5a945F0bB92e71629a3e78F401ADbb",
+      "funder": "0x19565F4771843467aAD632d6B56c75396785b06C",
+      "wrapped_native": null,
+      "root": "0x183e4b527d29eea5426e643c22ba0d21be7488d207db4cdfdd7278e68dcefe06",
+      "claim_count": 245,
+      "list_sha256": "63f1b1142df38f4531fdd8c536662820668450951834c21b76a8fff9e0dff1e0",
+      "manifest_sha256": "ce21f68a73f1bf332862f9b90562f02f560a2a3fdb9ac112c0332eb66dea9233",
+      "runtime_keccak256": "0xa301f9ed766c50c19b603208641a535e15d534c023a11e127b031a4825f33db7",
+      "deploy_tx": "0x9bf593296e9f3018dfeeacecd1c19da6e321bf828306a4cd2ab6562113a4a8eb",
+      "deploy_block": 53236366,
+      "assets": [
+        {
+          "token": "0x81893B6D44151716CEeEc730d8d89114C959a079",
+          "symbol": "sbMOODENG",
+          "decimals": 6,
+          "pools": [
+            {
+              "id": "base-sbmoodeng",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "symbol": "USDC",
+          "decimals": 6,
+          "pools": [
+            {
+              "id": "base-usdc",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "label": "linea",
+      "chain_id": 59144,
+      "address": "0x8A5607026b92977C34ABA988C5E22fC8B615CeAF",
+      "funder": "0x19565F4771843467aAD632d6B56c75396785b06C",
+      "wrapped_native": null,
+      "root": "0xa891a83a107cba0d21c67e9038061be945b2c62e3af6b7bd2299456bb7902772",
+      "claim_count": 1389,
+      "list_sha256": "30e030491a0e183cc9f74312b2c88b5a923ab3a21b044a07f613ef36c28f21af",
+      "manifest_sha256": "7179e94698f24201a530af677fd9fe2a46e13953df3f2b7f175ff411711ca0bf",
+      "runtime_keccak256": "0x62b4fc5e0faff1ed42efd514607ac655ac09bdaadebdb29efda5719ff753301d",
+      "deploy_tx": "0x37e87480ac0fe39a4744b6f3a662b8f7714c0a905a1522af5941aa44d2c2384a",
+      "deploy_block": 32461001,
+      "assets": [
+        {
+          "token": "0x176211869cA2b568f2A7D4EE941E073a821EE1ff",
+          "symbol": "USDC",
+          "decimals": 6,
+          "pools": [
+            {
+              "id": "linea-usdc",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        },
+        {
+          "token": "0xA219439258ca9da29E9Cc4cE5596924745e12B93",
+          "symbol": "USDT",
+          "decimals": 6,
+          "pools": [
+            {
+              "id": "linea-usdt",
+              "holders": "harmony",
+              "snapshot": "cutoff"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
