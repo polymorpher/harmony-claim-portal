@@ -1,5 +1,5 @@
 import { http, createConfig } from "wagmi";
-import { harmonyOne, mainnet, sepolia } from "wagmi/chains";
+import { arbitrum, base, bsc, harmonyOne, linea, mainnet, sepolia } from "wagmi/chains";
 import { injected, walletConnect } from "wagmi/connectors";
 
 const projectId = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID as string | undefined;
@@ -11,16 +11,21 @@ const METAMASK = "c57ca95b47569778a828d19178114f4db188b89b763c899ba0be274e97267d
 
 // The claim and confirm pages only need the connected address and
 // personal_sign; the vault page sends Ethereum transactions (Sepolia when its
-// catalog is the rehearsal one). Harmony is listed so wallets that keep a
+// catalog is the rehearsal one), and the bridge page sends claims on Ethereum,
+// BNB Chain, Arbitrum, Base and Linea. Harmony is listed so wallets that keep a
 // separate Harmony account can offer it; WalletConnect requests every chain as
 // optional.
 export const wagmiConfig = createConfig({
-  chains: [mainnet, harmonyOne, sepolia],
+  chains: [mainnet, harmonyOne, sepolia, bsc, arbitrum, base, linea],
   connectors: [injected({ shimDisconnect: true })],
   transports: {
     [mainnet.id]: http(),
     [harmonyOne.id]: http(),
     [sepolia.id]: http(),
+    [bsc.id]: http(),
+    [arbitrum.id]: http(),
+    [base.id]: http(),
+    [linea.id]: http(),
   },
 });
 
@@ -39,7 +44,7 @@ export const walletConnectConnector = projectId
       },
       metadata: {
         name: "Harmony migration",
-        description: "Look up a Harmony ONE migration claim, confirm wallet activity, and use governor vaults",
+        description: "Look up a Harmony ONE migration claim, confirm wallet activity, use governor vaults, and claim bridge collateral",
         url: typeof window !== "undefined" ? window.location.origin : "https://migrate.country",
         icons: [],
       },
