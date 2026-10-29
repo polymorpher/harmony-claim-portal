@@ -1,57 +1,9 @@
-import { createPublicClient, erc20Abi, fallback, http, type Address, type Chain, type Hex, type PublicClient } from "viem";
-import { mainnet, sepolia } from "viem/chains";
+import { erc20Abi, type Address, type Hex, type PublicClient } from "viem";
 import { depositEvent, transferEvent, vaultAbi, vaultEvents } from "./abi";
 import type { VaultLog } from "./activity";
 import { ONE_TOKEN_BLOCKS, type Catalog } from "./catalog";
 
-// Public endpoints that answer eth_getLogs from the browser. Tenderly's gateway serves full history over
-// wide ranges; dRPC's free tier caps a request at 10,000 blocks and publicnode only serves recent blocks,
-// so they are fallbacks for the chunked reads below.
-const DEFAULT_RPC_URLS: Record<number, string[]> = {
-  [mainnet.id]: ["https://mainnet.gateway.tenderly.co", "https://eth.drpc.org", "https://ethereum-rpc.publicnode.com"],
-  [sepolia.id]: [
-    "https://sepolia.gateway.tenderly.co",
-    "https://sepolia.drpc.org",
-    "https://ethereum-sepolia-rpc.publicnode.com",
-  ],
-};
-
-const EXPLORERS: Record<number, string> = {
-  [mainnet.id]: "https://etherscan.io",
-  [sepolia.id]: "https://sepolia.etherscan.io",
-};
-
-export function chainById(chainId: number): Chain {
-  if (chainId === mainnet.id) return mainnet;
-  if (chainId === sepolia.id) return sepolia;
-  throw new Error(`Unsupported chain ${chainId}`);
-}
-
-export function explorer(chainId: number): string {
-  return EXPLORERS[chainId] ?? EXPLORERS[mainnet.id];
-}
-
-function rpcUrls(chainId: number): string[] {
-  const configured = (import.meta.env.VITE_ETH_RPC_URLS ?? "")
-    .split(",")
-    .map((u: string) => u.trim())
-    .filter(Boolean);
-  return configured.length > 0 ? configured : DEFAULT_RPC_URLS[chainId];
-}
-
-const clients = new Map<number, PublicClient>();
-
-export function publicClient(chainId: number): PublicClient {
-  let client = clients.get(chainId);
-  if (!client) {
-    client = createPublicClient({
-      chain: chainById(chainId),
-      transport: fallback(rpcUrls(chainId).map((url) => http(url, { retryCount: 1, timeout: 20_000 }))),
-    });
-    clients.set(chainId, client);
-  }
-  return client;
-}
+export { chainById, explorer, publicClient } from "../chains";
 
 export interface VaultState {
   deployed: boolean;
