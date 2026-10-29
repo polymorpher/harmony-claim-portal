@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useAccount, useConnect, useDisconnect } from "wagmi";
+import { useConnect, useDisconnect } from "wagmi";
 import { ApiRequestError, fetchClaim, fetchMeta } from "./api";
 import { ClaimView } from "./ClaimView";
 import { formatUtc, looksLikeAddress, one, shortAddress } from "./format";
 import { Nav } from "./Nav";
+import { useWallet } from "./useWallet";
 import { connectErrorText, isConnecting } from "./wallet";
+import { WalletAccounts } from "./WalletAccounts";
 import { walletConnectConnector } from "./wagmi";
 
 function addressFromUrl(): string {
@@ -21,7 +23,8 @@ function setAddressInUrl(address: string) {
 }
 
 export function App() {
-  const { address: connected, isConnected } = useAccount();
+  const wallet = useWallet();
+  const connected = wallet.address;
   const { connectors, connect, isPending: connecting, variables: connectVariables, error: connectError } = useConnect();
   const { disconnect } = useDisconnect();
   const connectErrorMessage = connectErrorText(connectError);
@@ -29,15 +32,22 @@ export function App() {
   const [input, setInput] = useState(addressFromUrl);
   const [lookup, setLookup] = useState<string>(addressFromUrl);
   const [inputError, setInputError] = useState<string | null>(null);
+  const autoFilled = useRef<string | null>(null);
+
+  const showAddress = (address: string) => {
+    setInput(address);
+    setLookup(address);
+    setAddressInUrl(address);
+  };
 
   // Auto-lookup the connected wallet unless the user pasted another address.
   useEffect(() => {
-    if (isConnected && connected && !addressFromUrl()) {
-      setInput(connected);
-      setLookup(connected);
-      setAddressInUrl(connected);
-    }
-  }, [isConnected, connected]);
+    if (!connected) return;
+    const shown = addressFromUrl();
+    if (shown && shown !== autoFilled.current) return;
+    autoFilled.current = connected;
+    showAddress(connected);
+  }, [connected]);
 
   const meta = useQuery({ queryKey: ["meta"], queryFn: fetchMeta, staleTime: 60_000 });
   const claim = useQuery({
@@ -103,7 +113,7 @@ export function App() {
       <section className="card">
         <h2>1. Choose an address</h2>
         <div className="connect-row">
-          {isConnected && connected ? (
+          {connected ? (
             <>
               <span className="pill ok">Connected {shortAddress(connected)}</span>
               <button type="button" className="ghost" onClick={() => disconnect()}>
@@ -136,6 +146,13 @@ export function App() {
             </>
           )}
         </div>
+        <WalletAccounts
+          wallet={wallet}
+          onSelect={(address) => {
+            autoFilled.current = address;
+            showAddress(address);
+          }}
+        />
         {connectErrorMessage && <p className="error">{connectErrorMessage}</p>}
 
         <form className="lookup" onSubmit={onSubmit}>

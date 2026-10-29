@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useAccount, useConnect, useDisconnect, useSignMessage } from "wagmi";
+import { useConnect, useDisconnect } from "wagmi";
 import { hexToBech32, type SignatureScheme } from "@hcp/shared";
 import { ApiRequestError, fetchClaim, fetchConfirmation, fetchMeta, createConfirmationChallenge, submitConfirmation } from "./api";
 import { formatDate, formatUtc, one, shortAddress } from "./format";
 import { LEDGER_APP_LABEL, LedgerAccounts } from "./ledger/LedgerAccounts";
 import { useLedger } from "./ledger/useLedger";
 import { Nav } from "./Nav";
+import { useWallet } from "./useWallet";
 import { connectErrorText, isConnecting, walletErrorText } from "./wallet";
+import { WalletAccounts } from "./WalletAccounts";
 import { walletConnectConnector } from "./wagmi";
 
 function explain(err: unknown): string {
@@ -22,16 +24,17 @@ function explain(err: unknown): string {
 }
 
 export function ConfirmPage() {
-  const { address: walletAddress, isConnected } = useAccount();
+  const wallet = useWallet();
+  const walletAddress = wallet.address;
   const { connectors, connect, isPending: connecting, variables: connectVariables, error: connectError } = useConnect();
   const { disconnect } = useDisconnect();
-  const { signMessageAsync, isPending: signing } = useSignMessage();
   const ledger = useLedger();
   const connectErrorMessage = connectErrorText(connectError);
   const [signedMessage, setSignedMessage] = useState<string | null>(null);
 
   const ledgerAccount = ledger.account;
-  const connected = ledgerAccount?.address ?? (isConnected ? walletAddress : undefined);
+  const connected = ledgerAccount?.address ?? walletAddress;
+  const viaWalletConnect = !ledgerAccount && wallet.accounts.length > 0;
   const legacyLedger = ledger.app?.kind === "harmony-legacy";
 
   const injectedConnectors = useMemo(
@@ -52,9 +55,10 @@ export function ConfirmPage() {
   const claim = useQuery({
     queryKey: ["claim", connected?.toLowerCase()],
     queryFn: () => fetchClaim(connected!),
-    enabled: Boolean(connected) && status.data?.eligible === true,
+    enabled: Boolean(connected) && (status.data?.eligible === true || (status.data !== undefined && !ledgerAccount)),
     retry: false,
   });
+  const noClaim = status.data?.eligible === false && !ledgerAccount && claim.data?.found === false;
 
   useEffect(() => {
     setSignedMessage(null);
@@ -78,7 +82,7 @@ export function ConfirmPage() {
       setSignedMessage(challenge.message);
       const signed: { signature: string; scheme: SignatureScheme } = viaLedger
         ? await ledger.sign(challenge.message, connected)
-        : { signature: await signMessageAsync({ message: challenge.message }), scheme: "personal_sign" };
+        : { signature: await wallet.signMessage(challenge.message), scheme: "personal_sign" };
       return submitConfirmation(
         connected,
         challenge.nonce,
@@ -96,7 +100,7 @@ export function ConfirmPage() {
 
   const recorded = status.data?.confirmation;
   const activity = claim.data?.last_activity;
-  const waiting = confirm.isPending || signing;
+  const waiting = confirm.isPending;
 
   return (
     <div className="page">
@@ -122,10 +126,10 @@ export function ConfirmPage() {
                 Disconnect
               </button>
             </>
-          ) : isConnected && walletAddress ? (
+          ) : walletAddress ? (
             <>
               <span className="pill ok">Connected {shortAddress(walletAddress)}</span>
-              <button type="button" className="ghost" onClick={() => disconnect()}>
+              <button type="button" className="ghost" disabled={waiting} onClick={() => disconnect()}>
                 Disconnect
               </button>
             </>
@@ -159,6 +163,7 @@ export function ConfirmPage() {
           )}
         </div>
         <LedgerAccounts ledger={ledger} locked={waiting} />
+        {!ledgerAccount && <WalletAccounts wallet={wallet} locked={waiting} />}
         {connectErrorMessage && <p className="error">{connectErrorMessage}</p>}
         {ledger.error && <p className="error">{ledger.error}</p>}
         {!connected && (
@@ -168,8 +173,11 @@ export function ConfirmPage() {
             </li>
             {wcConnector && (
               <li>
-                <strong>WalletConnect</strong>: phone wallets, and Ledger Wallet (formerly Ledger Live). In Ledger Wallet,
-                open your Ethereum account, click WalletConnect, and paste the link.
+                <strong>WalletConnect</strong>: phone wallets, hardware wallet apps, and Ledger Wallet (formerly Ledger
+                Live). In Ledger Wallet, open your Ethereum account, click WalletConnect, and paste the link. The wallet
+                chooses which addresses to share. This page lists each one, including a Harmony address the wallet keeps
+                on Harmony's path (<code>m/44'/1023'</code>) and shares for the Harmony network, and signs with the one
+                you choose.
               </li>
             )}
             <li>
@@ -194,6 +202,23 @@ export function ConfirmPage() {
             <strong>This wallet cannot be confirmed here.</strong> Only wallets left out because they had no Harmony
             activity in the six months before the cutoff can use this page. See the{" "}
             <a href={`/?address=${encodeURIComponent(connected ?? "")}`}>claim lookup</a> for this wallet’s status.
+          </div>
+        )}
+        {noClaim && (
+          <div className="banner neutral">
+            <p>
+              <strong>This address has no migration claim.</strong> If you used a different address on Harmony,
+              connect the wallet that holds it{viaWalletConnect ? ", or choose it above if this wallet shares it" : ""}.
+              Some wallets keep Harmony addresses on Harmony's path (<code>m/44'/1023'/0'/0/N</code>) and give other
+              sites only their Ethereum address. In the wallet, select the Harmony network or the Harmony account, then
+              disconnect and connect again. A Harmony address on a Ledger works with the Ledger (USB) option.
+            </p>
+            <p>
+              <strong>Only if all else fails:</strong> recover that address's private key from the wallet's recovery
+              phrase with our <a href="/ledger">offline key tool</a>, on a computer that is offline, and import it into a
+              browser wallet to connect here. Typing a recovery phrase into a computer exposes it: afterwards, move
+              everything the wallet holds, on every network, to a new recovery phrase.
+            </p>
           </div>
         )}
         {status.data?.eligible && recorded && (

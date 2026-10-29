@@ -8,7 +8,9 @@ import { LEDGER_APP_LABEL, LedgerAccounts } from "../ledger/LedgerAccounts";
 import { useLedger, type LedgerSession } from "../ledger/useLedger";
 import { Nav } from "../Nav";
 import { onNavigate } from "../router";
+import { useWallet } from "../useWallet";
 import { connectErrorText, isConnecting } from "../wallet";
+import { WalletAccounts } from "../WalletAccounts";
 import { walletConnectConnector } from "../wagmi";
 import { readAgreements } from "./agreements";
 import { findVault, loadCatalog, type Catalog } from "./catalog";
@@ -19,7 +21,9 @@ import { VaultDetail } from "./VaultDetail";
 import { VaultList } from "./VaultList";
 
 function WalletPanel({ ledger, signer, catalog }: { ledger: LedgerSession; signer: VaultSigner; catalog: Catalog | undefined }) {
-  const { isConnected, address, chainId } = useAccount();
+  const { chainId } = useAccount();
+  const wallet = useWallet();
+  const address = wallet.address;
   const { connectors, connect, isPending: connecting, variables: connectVariables, error: connectError } = useConnect();
   const { disconnect } = useDisconnect();
   const connectErrorMessage = connectErrorText(connectError);
@@ -40,7 +44,7 @@ function WalletPanel({ ledger, signer, catalog }: { ledger: LedgerSession; signe
               Disconnect
             </button>
           </>
-        ) : isConnected && address ? (
+        ) : address ? (
           <>
             <span className="pill ok">Connected {shortAddress(address)}</span>
             <button type="button" className="ghost" onClick={() => disconnect()}>
@@ -70,6 +74,7 @@ function WalletPanel({ ledger, signer, catalog }: { ledger: LedgerSession; signe
         )}
       </div>
       <LedgerAccounts ledger={ledger} locked={false} />
+      {signer.via === "wallet" && <WalletAccounts wallet={wallet} />}
       {connectErrorMessage && <p className="error">{connectErrorMessage}</p>}
       {ledger.error && <p className="error">{ledger.error}</p>}
       {signer.blockedReason && (
@@ -77,7 +82,7 @@ function WalletPanel({ ledger, signer, catalog }: { ledger: LedgerSession; signe
           <strong>View only.</strong> {signer.blockedReason} <a href="/ledger">What you can do</a>.
         </div>
       )}
-      {signer.via === "wallet" && catalog && chainId !== catalog.chain_id && (
+      {signer.via === "wallet" && !signer.blockedReason && catalog && chainId !== catalog.chain_id && (
         <p className="small">Your wallet is on another network. It will be asked to switch to {network} when you send a transaction.</p>
       )}
       {!signer.address && (
