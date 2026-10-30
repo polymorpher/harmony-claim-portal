@@ -297,6 +297,15 @@ other page links there. Remove `unlisted` from its entry in
   or a Ledger's Ethereum app over USB. Rows not open yet are left out, since
   one failed transfer would revert the batch. The sender pays the fee and need
   not be the payee, so another wallet can claim for a Harmony Ledger address.
+- If the batch would revert, each row is simulated alone. A row whose token
+  refuses the transfer (paused, or the address blocked by its issuer) is
+  marked "Transfer refused" and left out, so the others can still be claimed.
+- A claim counts as paid only from the contract's `Claimed` events for the
+  batch in the included transaction. A transaction the wallet cancels or
+  replaces has a successful receipt of its own, which viem returns, so a
+  successful receipt alone is not enough. A transaction not included within
+  5 minutes, or not followed because the RPC failed, keeps its link and a
+  "Check again" button. Proof files time out after 30 seconds.
 
 Reads use `VITE_ETH_RPC_URLS` for Ethereum and `VITE_BSC_RPC_URLS`,
 `VITE_ARBITRUM_RPC_URLS`, `VITE_BASE_RPC_URLS`, and `VITE_LINEA_RPC_URLS` for
@@ -344,7 +353,9 @@ against the local build.
 
 A fork test claims one payee's rows with the page's own code after approving
 them from the impersonated custody Safe, and checks the payee's balances. It
-is skipped unless a fork is given:
+first sends the claim with mining paused and cancels it with a same-nonce
+transaction, and requires the page's code to report nothing claimed. It is
+skipped unless a fork is given:
 
 ```sh
 anvil --fork-url "$BSC_RPC" --port 8545
