@@ -55,10 +55,28 @@ export function formatAmount(raw: bigint, decimals: number, maxFraction = 6): st
   return shown ? `${grouped}.${shown}` : grouped;
 }
 
+function revertOf(err: unknown): ContractFunctionRevertedError | null {
+  const reverted = err instanceof BaseError ? err.walk((e) => e instanceof ContractFunctionRevertedError) : null;
+  return reverted instanceof ContractFunctionRevertedError ? reverted : null;
+}
+
+/** Whether `err` is the contract refusing the call, rather than the RPC or the wallet failing. */
+export function isRevert(err: unknown): boolean {
+  return revertOf(err) !== null;
+}
+
+/** Why one row would not pay, for a row checked on its own. */
+export function refusalText(err: unknown): string {
+  if (revertOf(err)?.data?.errorName === "TransferFailed") {
+    return "the token refused the transfer; it may be paused, or the address blocked by its issuer";
+  }
+  return claimErrorText(err);
+}
+
 /** Text for a claim the contract would refuse, from a simulation. */
 export function claimErrorText(err: unknown): string {
-  const reverted = err instanceof BaseError ? err.walk((e) => e instanceof ContractFunctionRevertedError) : null;
-  if (reverted instanceof ContractFunctionRevertedError) {
+  const reverted = revertOf(err);
+  if (reverted) {
     switch (reverted.data?.errorName) {
       case "TransferFailed":
         return "The custody Safe no longer makes enough of one of these assets available, or the token refused the transfer. Reload the page and try again.";

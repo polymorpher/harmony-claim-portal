@@ -19,6 +19,16 @@ export const bridgeClaimsAbi = [
     ],
     outputs: [{ name: "paid", type: "uint256" }],
   },
+  {
+    type: "event",
+    name: "Claimed",
+    inputs: [
+      { name: "index", type: "uint256", indexed: true },
+      { name: "account", type: "address", indexed: true },
+      { name: "token", type: "address", indexed: true },
+      { name: "amount", type: "uint256", indexed: false },
+    ],
+  },
   { type: "function", name: "isClaimed", stateMutability: "view", inputs: [{ name: "index", type: "uint256" }], outputs: [{ type: "bool" }] },
   { type: "function", name: "available", stateMutability: "view", inputs: [{ name: "token", type: "address" }], outputs: [{ type: "uint256" }] },
   { type: "error", name: "AlreadyClaimed", inputs: [{ name: "index", type: "uint256" }] },
