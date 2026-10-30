@@ -95,8 +95,28 @@ export function rowsFromShard(raw: unknown, account: Address, deployments: Bridg
   return rows.sort((a, b) => order.get(a.contract.label)! - order.get(b.contract.label)! || a.index - b.index);
 }
 
+export const PROOF_TIMEOUT_MS = 30_000;
+
+function downloadError(err: unknown): ProofError {
+  return (err as { name?: string } | null)?.name === "TimeoutError"
+    ? new ProofError(`The claim list did not load within ${PROOF_TIMEOUT_MS / 1000} seconds. Check your connection and try again.`)
+    : new ProofError("The claim list could not be downloaded. Check your connection and try again.");
+}
+
 export async function loadRows(account: Address): Promise<BridgeRow[]> {
-  const res = await fetch(shardUrl(account));
+  const signal = AbortSignal.timeout(PROOF_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(shardUrl(account), { signal });
+  } catch (err) {
+    throw downloadError(err);
+  }
   if (!res.ok) throw new ProofError(`The claim list could not be loaded (HTTP ${res.status}).`);
-  return rowsFromShard(await res.json(), account);
+  let raw: unknown;
+  try {
+    raw = await res.json();
+  } catch (err) {
+    throw err instanceof SyntaxError ? new ProofError("The claim list file is not valid JSON.") : downloadError(err);
+  }
+  return rowsFromShard(raw, account);
 }
