@@ -14,6 +14,7 @@ import { connectErrorText, isConnecting } from "../wallet";
 import { WalletAccounts } from "../WalletAccounts";
 import { walletConnectConnector } from "../wagmi";
 import { bridgeClaimsAbi } from "./abi";
+import { awaitClaim, checkBatch, ClaimError } from "./claim";
 import { BRIDGE, listUrls, NATIVE, type BridgeContract, type SnapshotBlock } from "./deployments";
 import { claimErrorText, claimManyArgs, claimManyData, formatAmount, payableRows, rowsByContract, rowStatus, type RowStatus } from "./model";
 import { loadRows, ProofError, type BridgeRow } from "./proofs";
@@ -129,10 +130,14 @@ type ClaimTx =
   | { phase: "checking" }
   | { phase: "wallet" }
   | { phase: "pending"; hash: Hex }
-  | { phase: "done"; hash: Hex; count: number }
-  | { phase: "error"; message: string };
+  | { phase: "done"; hash: Hex; count: number; skipped: number }
+  | { phase: "refused"; refused: { symbol: string; reason: string }[]; left: number }
+  /** `retry` is set while the transaction may still be included, to follow it again. */
+  | { phase: "error"; message: string; hash?: Hex; retry?: { hash: Hex; batch: BridgeRow[] } };
 
-function ClaimStatus({ tx, chainId, via }: { tx: ClaimTx; chainId: number; via: Signer["via"] }) {
+const assets = (n: number) => `${n} ${n === 1 ? "asset" : "assets"}`;
+
+function ClaimStatus({ tx, chainId, via, onRetry }: { tx: ClaimTx; chainId: number; via: Signer["via"]; onRetry: () => void }) {
   const link = (hash: Hex, text: string) => (
     <a href={`${explorer(chainId)}/tx/${hash}`} target="_blank" rel="noreferrer">
       {text}
@@ -150,11 +155,38 @@ function ClaimStatus({ tx, chainId, via }: { tx: ClaimTx; chainId: number; via: 
     case "done":
       return (
         <p className="ok-text">
-          Claimed {tx.count} {tx.count === 1 ? "asset" : "assets"} ({link(tx.hash, "view transaction")}).
+          Claimed {assets(tx.count)} ({link(tx.hash, "view transaction")}).
+          {tx.skipped > 0 && ` ${assets(tx.skipped)} had been claimed already.`}
         </p>
       );
+    case "refused":
+      return (
+        <div className="banner warn block">
+          {tx.left > 0 ? "Left out of the claim, because " : "Nothing can be claimed now, because "}
+          {tx.refused.map((r, i) => (
+            <span key={r.symbol}>
+              {i > 0 && "; "}
+              {r.symbol}: {r.reason}
+            </span>
+          ))}
+          .{tx.left > 0 && ` Claim the other ${assets(tx.left)} with the button above.`} Reload the page to try again later.
+        </div>
+      );
     case "error":
-      return <p className="error">{tx.message}</p>;
+      return (
+        <p className="error">
+          {tx.message}
+          {tx.hash && <> ({link(tx.hash, "view transaction")})</>}
+          {tx.retry && (
+            <>
+              {" "}
+              <button type="button" className="ghost small-button" onClick={onRetry}>
+                Check again
+              </button>
+            </>
+          )}
+        </p>
+      );
   }
 }
 
@@ -163,6 +195,10 @@ const STATUS_TEXT: Record<RowStatus, { text: string; className: string; title?: 
   ready: { text: "Ready", className: "" },
   waiting: { text: "Not open yet", className: "muted", title: "The custody Safe has not yet made this asset available to the claim contract." },
 };
+
+function refusedStatus(reason: string) {
+  return { text: "Transfer refused", className: "warn-text", title: `The check before claiming failed: ${reason}.` };
+}
 
 function AssetCell({ row }: { row: BridgeRow }) {
   if (row.asset.token === NATIVE) return <>{row.asset.symbol}</>;
@@ -229,9 +265,11 @@ function ChainCard({ contract, rows, signer }: { contract: BridgeContract; rows:
   const stateKey = ["bridge-state", contract.label, account.toLowerCase()];
   const state = useQuery({ queryKey: stateKey, queryFn: () => readContractState(contract, rows), staleTime: 30_000, retry: 1 });
   const [tx, setTx] = useState<ClaimTx>({ phase: "idle" });
+  // Rows whose own simulation reverted, by index, with the reason; left out of claims until the page reloads.
+  const [refused, setRefused] = useState<Map<number, string>>(() => new Map());
   const busy = tx.phase === "checking" || tx.phase === "wallet" || tx.phase === "pending";
   const ready = state.data?.code === "ok" ? state.data : null;
-  const payable = ready ? payableRows(rows, ready) : [];
+  const payable = ready ? payableRows(rows.filter((r) => !refused.has(r.index)), ready) : [];
   const allClaimed = ready !== null && rows.every((r) => ready.claimed.get(r.index));
   const waiting = ready !== null && rows.some((r) => rowStatus(r, ready) === "waiting");
   const native = rows.find((r) => r.asset.token === NATIVE);
@@ -239,24 +277,51 @@ function ChainCard({ contract, rows, signer }: { contract: BridgeContract; rows:
   const forSomeoneElse = sender !== null && sender.toLowerCase() !== account.toLowerCase();
   const sendBlocked = signer.via === "wallet" ? walletSendBlocked(signer, chainId) : null;
 
-  async function claim() {
-    const batch = payable;
-    if (!sender || batch.length === 0) return;
-    const client = publicClient(chainId);
-    setTx({ phase: "checking" });
+  async function follow(hash: Hex, batch: BridgeRow[]) {
+    setTx({ phase: "pending", hash });
     try {
-      await client.simulateContract({ account: sender, address: contract.address, abi: bridgeClaimsAbi, functionName: "claimMany", args: claimManyArgs(batch) });
-      setTx({ phase: "wallet" });
-      const hash = await signer.send({ chainId, to: contract.address, data: claimManyData(batch) });
-      setTx({ phase: "pending", hash });
-      const receipt = await client.waitForTransactionReceipt({ hash });
-      if (receipt.status !== "success") throw new Error("The transaction failed on chain.");
-      setTx({ phase: "done", hash, count: batch.length });
+      const outcome = await awaitClaim(publicClient(chainId), contract, batch, hash);
+      setTx({ phase: "done", hash: outcome.hash, count: outcome.paid, skipped: batch.length - outcome.paid });
     } catch (err) {
-      setTx({ phase: "error", message: claimErrorText(err) });
+      setTx(
+        err instanceof ClaimError
+          ? { phase: "error", message: err.message, hash: err.hash, retry: err.pending ? { hash, batch } : undefined }
+          : { phase: "error", message: claimErrorText(err), hash, retry: { hash, batch } },
+      );
     } finally {
       void queryClient.invalidateQueries({ queryKey: stateKey });
     }
+  }
+
+  async function claim() {
+    if (!sender || payable.length === 0) return;
+    const client = publicClient(chainId);
+    setTx({ phase: "checking" });
+    let batch: BridgeRow[];
+    try {
+      const checked = await checkBatch(payable, (rows) =>
+        client.simulateContract({ account: sender, address: contract.address, abi: bridgeClaimsAbi, functionName: "claimMany", args: claimManyArgs(rows) }),
+      );
+      if (checked.refused.length > 0) {
+        setRefused((old) => new Map([...old, ...checked.refused.map((r) => [r.row.index, r.reason] as const)]));
+        setTx({ phase: "refused", refused: checked.refused.map((r) => ({ symbol: r.row.asset.symbol, reason: r.reason })), left: checked.batch.length });
+        return;
+      }
+      batch = checked.batch;
+      setTx({ phase: "wallet" });
+    } catch (err) {
+      setTx({ phase: "error", message: claimErrorText(err) });
+      return;
+    }
+    let hash: Hex;
+    try {
+      hash = await signer.send({ chainId, to: contract.address, data: claimManyData(batch) });
+    } catch (err) {
+      setTx({ phase: "error", message: claimErrorText(err) });
+      void queryClient.invalidateQueries({ queryKey: stateKey });
+      return;
+    }
+    await follow(hash, batch);
   }
 
   return (
@@ -279,7 +344,8 @@ function ChainCard({ contract, rows, signer }: { contract: BridgeContract; rows:
         </thead>
         <tbody>
           {rows.map((r) => {
-            const status = ready ? STATUS_TEXT[rowStatus(r, ready)] : null;
+            const reason = refused.get(r.index);
+            const status = ready ? (reason && !ready.claimed.get(r.index) ? refusedStatus(reason) : STATUS_TEXT[rowStatus(r, ready)]) : null;
             return (
               <tr key={r.index}>
                 <td>
@@ -313,7 +379,7 @@ function ChainCard({ contract, rows, signer }: { contract: BridgeContract; rows:
         </div>
       )}
       {allClaimed && <p className="ok-text">Everything on {name} has been claimed.</p>}
-      {ready && !allClaimed && payable.length === 0 && (
+      {ready && !allClaimed && payable.length === 0 && waiting && (
         <p className="muted">
           Claims on {name} are not open yet. They open once the custody Safe approves this contract for each asset; this page then
           shows them as ready.
@@ -356,7 +422,14 @@ function ChainCard({ contract, rows, signer }: { contract: BridgeContract; rows:
           {native.asset.symbol} instead.
         </p>
       )}
-      <ClaimStatus tx={tx} chainId={chainId} via={signer.via} />
+      <ClaimStatus
+        tx={tx}
+        chainId={chainId}
+        via={signer.via}
+        onRetry={() => {
+          if (tx.phase === "error" && tx.retry) void follow(tx.retry.hash, tx.retry.batch);
+        }}
+      />
     </section>
   );
 }
@@ -373,7 +446,12 @@ function Results({ account, signer }: { account: Address; signer: Signer }) {
   if (rows.error) {
     return (
       <section className="card">
-        <p className="error">{rows.error instanceof ProofError ? rows.error.message : "The claim list could not be loaded. Check your connection and try again."}</p>
+        <p className="error">
+          {rows.error instanceof ProofError ? rows.error.message : "The claim list could not be loaded. Check your connection and try again."}{" "}
+          <button type="button" className="ghost small-button" disabled={rows.isFetching} onClick={() => void rows.refetch()}>
+            Try again
+          </button>
+        </p>
       </section>
     );
   }
