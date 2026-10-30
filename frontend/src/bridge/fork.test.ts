@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createTestClient, erc20Abi, getAddress, http, parseAbi, parseEther, publicActions, walletActions, type Address, type PublicClient } from "viem";
 import { chainById } from "../chains";
 import { bridgeClaimsAbi } from "./abi";
+import { awaitClaim, ClaimError } from "./claim";
 import { contractByLabel, NATIVE } from "./deployments";
 import { claimManyArgs, claimManyData, payableRows } from "./model";
 import { rowsFromShard, type BridgeRow } from "./proofs";
@@ -38,7 +39,7 @@ function payeeRows(label: string, dir: string, wanted?: string): BridgeRow[] {
 }
 
 describe.skipIf(!LABEL || !RPC || !PROOFS)("claims on a fork", () => {
-  it("pays every row of a payee once the custody Safe approves, and only once", { timeout: 120_000 }, async () => {
+  it("pays every row of a payee once the custody Safe approves, only once, and not when cancelled", { timeout: 180_000 }, async () => {
     const contract = contractByLabel(LABEL!)!;
     const client = createTestClient({ chain: chainById(contract.chain_id), mode: "anvil", transport: http(RPC) })
       .extend(publicActions)
@@ -69,6 +70,35 @@ describe.skipIf(!LABEL || !RPC || !PROOFS)("claims on a fork", () => {
     const opened = await readContractState(contract, rows, reader);
     expect(payableRows(rows, opened)).toEqual(rows);
 
+    // The wallet cancels the claim before it is mined: viem returns the cancellation's successful
+    // receipt, which must not count as a claim.
+    let cancelled: unknown;
+    await client.setAutomine(false);
+    try {
+      const sent = await client.sendTransaction({ account: SENDER, to: contract.address, data: claimManyData(rows), chain: null });
+      const pending = await client.getTransaction({ hash: sent });
+      const following = awaitClaim(reader, contract, rows, sent, 60_000).catch((e: unknown) => e);
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      const tip = pending.maxPriorityFeePerGas! * 2n + 1n;
+      const cap = pending.maxFeePerGas! * 2n;
+      await client.sendTransaction({
+        account: SENDER,
+        to: SENDER,
+        value: 0n,
+        nonce: pending.nonce,
+        maxFeePerGas: cap > tip ? cap : tip,
+        maxPriorityFeePerGas: tip,
+        chain: null,
+      });
+      await client.mine({ blocks: 1 });
+      cancelled = await following;
+    } finally {
+      await client.setAutomine(true);
+    }
+    expect(cancelled).toBeInstanceOf(ClaimError);
+    expect((cancelled as ClaimError).message).toMatch(/cancelled in the wallet/);
+    expect((await readContractState(contract, rows, reader)).claimed).toEqual(opened.claimed);
+
     const balances = () =>
       Promise.all(
         rows.map(async (r) =>
@@ -82,7 +112,7 @@ describe.skipIf(!LABEL || !RPC || !PROOFS)("claims on a fork", () => {
     const { result } = await client.simulateContract({ account: SENDER, address: contract.address, abi: bridgeClaimsAbi, functionName: "claimMany", args: claimManyArgs(rows) });
     expect(result).toBe(BigInt(rows.length));
     const hash = await client.sendTransaction({ account: SENDER, to: contract.address, data: claimManyData(rows), chain: null });
-    expect((await client.waitForTransactionReceipt({ hash })).status).toBe("success");
+    expect(await awaitClaim(reader, contract, rows, hash)).toEqual({ hash, paid: rows.length });
     const end = await balances();
     rows.forEach((r, i) => expect(end[i] - start[i]).toBe(r.amount));
 
